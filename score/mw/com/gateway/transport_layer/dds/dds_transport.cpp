@@ -218,9 +218,10 @@ score::Result<void> DdsTransport::ForwardSampleData(score::mw::com::InstanceSpec
     return {};
 }
 
-score::Result<void> DdsTransport::RegisterUpdateNotification(score::mw::com::InstanceSpecifier service_instance_specifier,
-                                                             impl::ServiceElementType /* element_type */,
-                                                             std::string element_name)
+score::Result<void> DdsTransport::RegisterUpdateNotification(
+    score::mw::com::InstanceSpecifier service_instance_specifier,
+    impl::ServiceElementType /* element_type */,
+    std::string element_name)
 {
     const std::string topic_name = MakeTopicName(service_instance_specifier, element_name);
     if (consumers_.find(topic_name) != consumers_.end())
@@ -252,9 +253,10 @@ score::Result<void> DdsTransport::RegisterUpdateNotification(score::mw::com::Ins
     return {};
 }
 
-score::Result<void> DdsTransport::UnregisterUpdateNotification(score::mw::com::InstanceSpecifier service_instance_specifier,
-                                                               impl::ServiceElementType /* element_type */,
-                                                               std::string element_name)
+score::Result<void> DdsTransport::UnregisterUpdateNotification(
+    score::mw::com::InstanceSpecifier service_instance_specifier,
+    impl::ServiceElementType /* element_type */,
+    std::string element_name)
 {
     const std::string topic_name = MakeTopicName(service_instance_specifier, element_name);
     const auto it = consumers_.find(topic_name);
@@ -281,8 +283,7 @@ score::Result<void> DdsTransport::Unsubscribe(score::mw::com::InstanceSpecifier 
                                               impl::ServiceElementType element_type,
                                               std::string element_name)
 {
-    return UnregisterUpdateNotification(
-        std::move(service_instance_specifier), element_type, std::move(element_name));
+    return UnregisterUpdateNotification(std::move(service_instance_specifier), element_type, std::move(element_name));
 }
 
 bool DdsTransport::WaitForUpdate(const score::mw::com::InstanceSpecifier& service_instance_specifier,
@@ -296,13 +297,14 @@ bool DdsTransport::WaitForUpdate(const score::mw::com::InstanceSpecifier& servic
         return false;
     }
     dds_attach_t triggered[1];
-    const dds_return_t n = dds_waitset_wait(
-        it->second.waitset, triggered, 1, DDS_MSECS(static_cast<dds_duration_t>(timeout_ms)));
+    const dds_return_t n =
+        dds_waitset_wait(it->second.waitset, triggered, 1, DDS_MSECS(static_cast<dds_duration_t>(timeout_ms)));
     return n > 0;
 }
 
 std::vector<std::uint8_t> DdsTransport::TakeLastPayload(
-    const score::mw::com::InstanceSpecifier& service_instance_specifier, const std::string& element_name)
+    const score::mw::com::InstanceSpecifier& service_instance_specifier,
+    const std::string& element_name)
 {
     const std::string topic_name = MakeTopicName(service_instance_specifier, element_name);
     const auto it = consumers_.find(topic_name);

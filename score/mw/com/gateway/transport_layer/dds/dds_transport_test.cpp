@@ -42,9 +42,8 @@ class DdsTransportTest : public ::testing::Test
 
         ASSERT_TRUE(transport_.ProvideService(specifier_, elements).has_value());
         ASSERT_TRUE(transport_.OfferService(specifier_).has_value());
-        ASSERT_TRUE(
-            transport_.Subscribe(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName)
-                .has_value());
+        ASSERT_TRUE(transport_.Subscribe(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName)
+                        .has_value());
 
         // Give DDS discovery a moment to match writer/reader within the same participant.
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -60,8 +59,7 @@ class DdsTransportTest : public ::testing::Test
 TEST_F(DdsTransportTest, NotifyUpdateDeliversZeroLengthPing)
 {
     ASSERT_TRUE(
-        transport_.NotifyUpdate(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName)
-            .has_value());
+        transport_.NotifyUpdate(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName).has_value());
 
     ASSERT_TRUE(transport_.WaitForUpdate(specifier_, kElementName, kWaitTimeoutMs));
     EXPECT_TRUE(transport_.TakeLastPayload(specifier_, kElementName).empty());
@@ -84,11 +82,10 @@ TEST_F(DdsTransportTest, ForwardSampleDataDeliversExactBytes)
 TEST_F(DdsTransportTest, UnregisterAfterUnsubscribeFailsWithNotConnected)
 {
     ASSERT_TRUE(
-        transport_.Unsubscribe(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName)
-            .has_value());
+        transport_.Unsubscribe(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName).has_value());
 
-    const auto result =
-        transport_.UnregisterUpdateNotification(specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName);
+    const auto result = transport_.UnregisterUpdateNotification(
+        specifier_, score::mw::com::impl::ServiceElementType::EVENT, kElementName);
     EXPECT_FALSE(result.has_value());
 }
 

@@ -52,9 +52,9 @@ cc_library(
     ],
     deps = [
         ":sample_payload_idl",
+        "//score/mw/com:types",
         "//score/mw/com/gateway/transport_layer:transport",
         "//score/mw/com/gateway/transport_layer:transport_error",
-        "//score/mw/com:types",
         "//score/mw/com/impl:service_element_type",
         "@cyclonedds//:ddsc",
         "@score_baselibs//score/result",

@@ -19,32 +19,29 @@ extern "C" {
 #define DDS_SEQUENCE_OCTET_DEFINED
 typedef struct dds_sequence_octet
 {
-  uint32_t _maximum;
-  uint32_t _length;
-  uint8_t *_buffer;
-  bool _release;
+    uint32_t _maximum;
+    uint32_t _length;
+    uint8_t* _buffer;
+    bool _release;
 } dds_sequence_octet;
 
-#define dds_sequence_octet__alloc() \
-((dds_sequence_octet*) dds_alloc (sizeof (dds_sequence_octet)));
+#define dds_sequence_octet__alloc() ((dds_sequence_octet*)dds_alloc(sizeof(dds_sequence_octet)));
 
-#define dds_sequence_octet_allocbuf(l) \
-((uint8_t *) dds_alloc ((l) * sizeof (uint8_t)))
+#define dds_sequence_octet_allocbuf(l) ((uint8_t*)dds_alloc((l) * sizeof(uint8_t)))
 #endif /* DDS_SEQUENCE_OCTET_DEFINED */
 
 typedef struct score_gw_dds_SamplePayload
 {
-  uint64_t update_seq;
-  dds_sequence_octet payload;
+    uint64_t update_seq;
+    dds_sequence_octet payload;
 } score_gw_dds_SamplePayload;
 
 extern const dds_topic_descriptor_t score_gw_dds_SamplePayload_desc;
 
 #define score_gw_dds_SamplePayload__alloc() \
-((score_gw_dds_SamplePayload*) dds_alloc (sizeof (score_gw_dds_SamplePayload)));
+    ((score_gw_dds_SamplePayload*)dds_alloc(sizeof(score_gw_dds_SamplePayload)));
 
-#define score_gw_dds_SamplePayload_free(d,o) \
-dds_sample_free ((d), &score_gw_dds_SamplePayload_desc, (o))
+#define score_gw_dds_SamplePayload_free(d, o) dds_sample_free((d), &score_gw_dds_SamplePayload_desc, (o))
 
 #ifdef __cplusplus
 }

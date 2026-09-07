@@ -17,6 +17,9 @@
 #include "score/mw/com/types.h"
 #include "score/result/result.h"
 
+#include <score/span.hpp>
+
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -114,6 +117,49 @@ class Transport
         score::mw::com::InstanceSpecifier service_instance_specifier,
         impl::ServiceElementType element_type,
         std::string element_name) = 0;
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Copying-gateway APIs (IsMemorySharingSupported() == false). Not pure virtual: the existing
+    // memory-sharing-only implementation (transport_layer/sample) never overrides these and keeps compiling
+    // unchanged. Every method here returns TransportErrorc::kNotSupported by default (see transport.cpp) — a
+    // transport that returns false from IsMemorySharingSupported() MUST override all three, or a forwarded
+    // service using it will silently never actually deliver data. See this repo's README.md "Copying Gateway"
+    // row, which already named this gateway type; until now nothing in this class actually supported it.
+    // ---------------------------------------------------------------------------------------------------------
+
+    /// \brief Forwards the actual sample payload for an event/field to the destination gateway, when there is no
+    /// shared memory to make it visible in.
+    /// \details Mirrors NotifyUpdate's addressing (same three identifying parameters) — NotifyUpdate alone is
+    /// enough for a memory-sharing transport (the destination reads the update from shared memory itself), but a
+    /// copying transport has no shared memory for the destination to read from, so the payload has to travel
+    /// through this call instead.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
+    /// \param element_name name of the service element whose sample is being forwarded.
+    /// \param sample_data the serialized sample payload, exactly as the source-side proxy received it.
+    /// \return result indicating success or failure.
+    virtual score::Result<void> ForwardSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                                  impl::ServiceElementType element_type,
+                                                  std::string element_name,
+                                                  score::cpp::span<const std::uint8_t> sample_data);
+
+    /// \brief Subscribes for actual sample data (not just update notifications) for a service element, on a
+    /// transport that doesn't support memory sharing.
+    /// \details A memory-sharing transport's destination side already has direct access to the data once
+    /// RegisterUpdateNotification fires; a copying transport needs an explicit subscribe/unsubscribe pair so the
+    /// source side knows whether it's worth calling ForwardSampleData at all.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
+    /// \param element_name name of the service element to subscribe to.
+    /// \return result indicating success or failure.
+    virtual score::Result<void> Subscribe(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                          impl::ServiceElementType element_type,
+                                          std::string element_name);
+
+    /// \brief Reverse of Subscribe — see its doc comment for the corresponding semantics.
+    virtual score::Result<void> Unsubscribe(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                            impl::ServiceElementType element_type,
+                                            std::string element_name);
 };
 
 }  // namespace score::mw::com::gateway

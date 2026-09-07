@@ -18,6 +18,9 @@
 #include "score/mw/com/types.h"
 #include "score/result/result.h"
 
+#include <score/span.hpp>
+
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -89,6 +92,23 @@ class GatewayCore
     virtual score::Result<void> NotifyUpdate(score::mw::com::InstanceSpecifier service_instance_specifier,
                                              impl::ServiceElementType updated_element_type,
                                              std::string updated_element_name) = 0;
+
+    /// \brief Reciprocal of Transport::ForwardSampleData — delivers a forwarded sample's payload to the
+    /// (generic) skeleton locally within the destination domain, for a transport that doesn't support memory
+    /// sharing.
+    /// \details Not pure virtual — see Transport::ForwardSampleData's doc comment for why. Default
+    /// implementation returns GatewayErrorc::kNotSupported; a GatewayApplication that's paired with a
+    /// copying-capable transport must override this.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
+    /// \param element_name name of the service element whose sample was forwarded.
+    /// \param sample_data the serialized sample payload, to be written into the Forwarding Skeleton's local
+    /// representation of this event/field.
+    /// \return result indicating success or failure.
+    virtual score::Result<void> ReceiveSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                                  impl::ServiceElementType element_type,
+                                                  std::string element_name,
+                                                  score::cpp::span<const std::uint8_t> sample_data);
 };
 
 }  // namespace score::mw::com::gateway

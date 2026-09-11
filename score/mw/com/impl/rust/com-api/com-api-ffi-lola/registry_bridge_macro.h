@@ -64,6 +64,10 @@
 #ifndef SCORE_MW_COM_REGISTRY_BRIDGE_MACROS_H
 #define SCORE_MW_COM_REGISTRY_BRIDGE_MACROS_H
 
+#include "score/mw/com/impl/methods/proxy_method_base.h"
+#include "score/mw/com/impl/methods/proxy_method_binding.h"
+#include "score/mw/com/impl/methods/skeleton_method_base.h"
+#include "score/mw/com/impl/methods/skeleton_method_binding.h"
 #include "score/mw/com/impl/plumbing/sample_ptr.h"
 #include "score/mw/com/impl/proxy_base.h"
 #include "score/mw/com/impl/proxy_event.h"
@@ -146,6 +150,35 @@ void mw_com_impl_call_dyn_ref_fnmut_find_service(
     const ::score::mw::com::impl::rust::FatPtr* boxed_fnmut,
     void* service_handles,
     ::score::mw::com::impl::FindServiceHandle find_service_handle) noexcept;
+
+/// \brief Rust closure invocation for a registered SkeletonMethod handler.
+/// \details Called by C++ (registry_bridge_macro.cpp's mw_com_skeleton_method_register_handler, via the
+/// SkeletonMethodBinding::TypeErasedHandler it registers) whenever a Proxy calls the method this handler was
+/// registered for. Mirrors mw_com_impl_call_dyn_fnmut's adapter pattern, but the callback signature here matches
+/// SkeletonMethodBinding::TypeErasedCallbackSignature (score/mw/com/impl/methods/skeleton_method_binding.h):
+/// void(QualityType, optional<span<byte>> in_args, optional<span<byte>> return_value). The two
+/// std::optional<span<byte>> parameters are flattened into (ptr, len, present) triples here because
+/// std::optional/score::cpp::span aren't FFI-safe types; `in_args_present`/`return_present` tell the Rust side
+/// whether the corresponding buffer exists at all (a method with no in-args, or a void-returning method, doesn't
+/// have one) as opposed to merely being zero-length.
+/// \param boxed_fnmut Pointer to FatPtr representing the Rust closure registered via RegisterHandler
+/// \param quality_type The QualityType (score/mw/com/impl/configuration/quality_type.h) of the caller, narrowed to
+/// std::uint8_t for the FFI boundary
+/// \param in_args_data Pointer to the in-args buffer, or nullptr if in_args_present is false
+/// \param in_args_len Length in bytes of the in-args buffer (only meaningful if in_args_present)
+/// \param in_args_present Whether this method call has in-arguments at all
+/// \param return_data Pointer to the return-value buffer the handler must write its result into, or nullptr if
+/// return_present is false
+/// \param return_len Length in bytes of the return-value buffer (only meaningful if return_present)
+/// \param return_present Whether this method has a non-void return type at all
+void mw_com_impl_call_method_handler(const ::score::mw::com::impl::rust::FatPtr* boxed_fnmut,
+                                     std::uint8_t quality_type,
+                                     std::uint8_t* in_args_data,
+                                     std::size_t in_args_len,
+                                     bool in_args_present,
+                                     std::uint8_t* return_data,
+                                     std::size_t return_len,
+                                     bool return_present) noexcept;
 }
 
 /// \brief Template specialization of RustBoxedCallable for void return type
@@ -554,6 +587,74 @@ class MemberOperationImpl : public MemberOperation
     const TypeOperations* type_ops_ptr_;
 };
 
+/// \brief Interface for type-erased access to a Method member (as opposed to an Event member, see
+/// MemberOperation above).
+/// \details Added in this fork (2026-09-08) alongside the ported PR #818 Rust Method<T>/Field<T> design, to give
+/// the FFI layer a way to reach the type-erased ProxyMethodBinding/SkeletonMethodBinding underneath a generated
+/// Proxy/Skeleton's ProxyMethod<Signature>/SkeletonMethod<Signature> member.
+/// \note Unlike events, Method has no per-type TypeOperations equivalent here: ProxyMethodBinding/
+/// SkeletonMethodBinding (score/mw/com/impl/methods/proxy_method_binding.h, skeleton_method_binding.h) are
+/// already fully type-erased at the C++ level (they operate on score::cpp::span<std::byte> + a queue position,
+/// not a template parameter) — the per-signature type information only exists one layer up, in
+/// ProxyMethod<Signature>/SkeletonMethod<Signature> themselves, which this registry deliberately does not need to
+/// know about (that's what the interface_macros.rs / method_concept.rs typed layer on the Rust side is for,
+/// mirroring how score_com_concept already provides the "typed" equivalent of what ProxyEvent<T>/SkeletonEvent<T>
+/// are for events). So MethodMemberOperationImpl below has no `EventType`/`TypeOperations` template parameter at
+/// all — just the Proxy/Skeleton types and the two member pointers.
+class MethodMemberOperation
+{
+  public:
+    virtual ~MethodMemberOperation() = default;
+
+    /// \brief Get the type-erased ProxyMethodBinding underneath a ProxyBase's ProxyMethod<Signature> member.
+    /// \param proxy_ptr Pointer to ProxyBase instance
+    /// \return Pointer to ProxyMethodBinding if found (and the binding constructed successfully), nullptr
+    /// otherwise.
+    virtual ProxyMethodBinding* GetProxyMethodBinding(ProxyBase* proxy_ptr) = 0;
+
+    /// \brief Get the type-erased SkeletonMethodBinding underneath a SkeletonBase's SkeletonMethod<Signature>
+    /// member.
+    /// \param skeleton_ptr Pointer to SkeletonBase instance
+    /// \return Pointer to SkeletonMethodBinding if found, nullptr otherwise.
+    virtual SkeletonMethodBinding* GetSkeletonMethodBinding(SkeletonBase* skeleton_ptr) = 0;
+};
+
+/// \brief Template implementation of MethodMemberOperation for specific ProxyType and SkeletonType.
+/// \details `proxy_method_member`/`skeleton_method_member` are pointers to a ProxyMethod<Signature>/
+/// SkeletonMethod<Signature> data member on the generated Proxy/Skeleton class — the Signature itself is not a
+/// template parameter of this class (see class comment on MethodMemberOperation for why that's fine: the binding
+/// pointer these accessors return is already fully type-erased).
+template <typename ProxyType, typename SkeletonType, auto proxy_method_member, auto skeleton_method_member>
+class MethodMemberOperationImpl : public MethodMemberOperation
+{
+  public:
+    ProxyMethodBinding* GetProxyMethodBinding(ProxyBase* proxy_ptr) override
+    {
+        auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
+        if (proxy == nullptr)
+        {
+            return nullptr;
+        }
+        // proxy->*proxy_method_member is a ProxyMethod<Signature>&, which upcasts implicitly to
+        // ProxyMethodBase& (its base class) here — no Signature-specific code needed in this function.
+        return ProxyMethodBaseView{proxy->*proxy_method_member}.GetMethodBinding();
+    }
+
+    SkeletonMethodBinding* GetSkeletonMethodBinding(SkeletonBase* skeleton_ptr) override
+    {
+        if (skeleton_ptr == nullptr)
+        {
+            return nullptr;
+        }
+        auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
+        if (skeleton == nullptr)
+        {
+            return nullptr;
+        }
+        return SkeletonMethodBaseView{skeleton->*skeleton_method_member}.GetMethodBinding();
+    }
+};
+
 /// \brief Interface for type-erased proxy and skeleton creation operations
 /// \details Provides methods to create proxy/skeleton instances and register/retrieve member operations.
 /// Maintains a registry of member operations for events, methods, and fields.
@@ -595,9 +696,31 @@ class InterfaceOperations
         return nullptr;
     }
 
+    /// \brief Register a method member operation (see MethodMemberOperation). Kept in a separate map from
+    /// RegisterMemberOperation's (event) map: methods and events are looked up via separate FFI entry points
+    /// (mw_com_get_method_from_proxy/skeleton vs. mw_com_get_event_from_proxy/skeleton) since Rust already knows
+    /// statically, from the `interface!` macro expansion, whether a given member is a Method or an Event/Field.
+    void RegisterMethodOperation(const std::string_view member_name, std::unique_ptr<MethodMemberOperation> ops)
+    {
+        method_operation_map_[member_name] = std::move(ops);
+    }
+
+    /// \brief Get method member operation by name. See RegisterMethodOperation.
+    MethodMemberOperation* GetMethodOperation(const std::string_view member_name)
+    {
+        auto it = method_operation_map_.find(member_name);
+        if (it != method_operation_map_.end())
+        {
+            return it->second.get();
+        }
+        return nullptr;
+    }
+
   private:
     using MemberOperationMap = std::unordered_map<std::string_view, std::unique_ptr<MemberOperation>>;
     MemberOperationMap member_operation_map_;
+    using MethodOperationMap = std::unordered_map<std::string_view, std::unique_ptr<MethodMemberOperation>>;
+    MethodOperationMap method_operation_map_;
 };
 
 /// \brief Template implementation of InterfaceOperations for specific Proxy and Skeleton types
@@ -713,6 +836,31 @@ class GlobalRegistryMapping
     {
         return GetInterfaceOperation(interface_id);
     }
+
+    /// \brief Register method operation for a specific interface and member name. See
+    /// InterfaceOperations::RegisterMethodOperation. Called by the EXPORT_MW_COM_METHOD macro.
+    static void RegisterMethodOperation(const std::string_view interface_id,
+                                        const std::string_view member_name,
+                                        std::unique_ptr<MethodMemberOperation> ops)
+    {
+        const auto& registries = GetInterfaceOperation(interface_id);
+        if (registries)
+        {
+            registries->RegisterMethodOperation(member_name, std::move(ops));
+        }
+    }
+
+    /// \brief Find method operation for a specific interface and member name.
+    static MethodMemberOperation* FindMethodOperation(const std::string_view interface_id,
+                                                      const std::string_view member_name)
+    {
+        auto* ops = GetInterfaceOperation(interface_id);
+        if (ops)
+        {
+            return ops->GetMethodOperation(member_name);
+        }
+        return nullptr;
+    }
 };
 
 // Declare the FFI function for Rust closure invocation with type erasure.
@@ -793,6 +941,31 @@ inline ::score::mw::com::impl::rust::TypeOperationImpl<T>& get_type_operations()
     {                                                                                                             \
     event_member##_EventRegistrationHelper event_member##_event_reg_instance;                                     \
     } /* namespace */
+
+/// \brief Macro to register method member operations (see MethodMemberOperation/MethodMemberOperationImpl).
+/// \details Unlike EXPORT_MW_COM_EVENT, this macro takes no type parameter: the Signature of the underlying
+/// ProxyMethod<Signature>/SkeletonMethod<Signature> member is inferred from the member pointer itself
+/// (&ProxyType::method_member), and MethodMemberOperationImpl doesn't need it as a template parameter because the
+/// binding pointers it hands back are already fully type-erased (see MethodMemberOperation's class comment).
+/// \param method_member Method member name in Proxy and Skeleton classes (e.g., get_tire_pressure)
+/// \note Example usage: EXPORT_MW_COM_METHOD(get_tire_pressure)
+#define EXPORT_MW_COM_METHOD(method_member)                                                                \
+    struct method_member##_MethodRegistrationHelper                                                        \
+    {                                                                                                      \
+        method_member##_MethodRegistrationHelper()                                                         \
+        {                                                                                                  \
+            auto method_info = std::make_unique<                                                           \
+                ::score::mw::com::impl::rust::MethodMemberOperationImpl<ProxyType,                         \
+                                                                        SkeletonType,                      \
+                                                                        &ProxyType::method_member,         \
+                                                                        &SkeletonType::method_member>>();  \
+                                                                                                           \
+            ::score::mw::com::impl::rust::GlobalRegistryMapping::RegisterMethodOperation(                  \
+                std::string_view(id_interface), std::string_view(#method_member), std::move(method_info)); \
+        }                                                                                                  \
+    };                                                                                                     \
+                                                                                                           \
+    static method_member##_MethodRegistrationHelper method_member##_method_reg_instance;
 
 #define END_EXPORT_MW_COM_INTERFACE() }  // namespace id##_detail
 

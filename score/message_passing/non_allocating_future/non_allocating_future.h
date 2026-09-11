@@ -71,6 +71,14 @@ class NonAllocatingFuture
         });
     }
 
+    /// \brief Non-blocking check of readiness, for callers that pump their own event loop instead of parking on
+    /// cv_.wait() (e.g. a nested/reentrant SendWaitReply call already running on the engine's callback thread).
+    bool IsReady() const noexcept
+    {
+        std::lock_guard lock{mutex_};
+        return ready_;
+    }
+
   private:
     Lockable& mutex_;
     CV& cv_;
@@ -88,6 +96,7 @@ class NonAllocatingFuture<Lockable, CV, void> : NonAllocatingFuture<Lockable, CV
     }
     using NonAllocatingFuture<Lockable, CV, std::monostate>::MarkReady;
     using NonAllocatingFuture<Lockable, CV, std::monostate>::Wait;
+    using NonAllocatingFuture<Lockable, CV, std::monostate>::IsReady;
 
   private:
     std::monostate blank_;

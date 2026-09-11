@@ -285,6 +285,103 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
     /// Optionally accepts a path to the service-instance manifest. When omitted the
     /// default location compiled into the middleware is used.
     fn initialize(&self, manifest_location: Option<&Path>);
+
+    // --- Method FFI (added this fork, 2026-09-08, alongside the ported PR #818 Rust Method<T>/Field<T>
+    // design — see com-api-runtime-lola's method.rs for the caller/handler code that uses these, and
+    // registry_bridge_macro.h/.cpp on the C++ side for the implementation). Unlike the event methods
+    // above, these operate directly on the type-erased ProxyMethodBinding/SkeletonMethodBinding, with no
+    // TypeOperationsManager-style per-type indirection needed (see MethodMemberOperation's C++-side doc
+    // comment for why).
+
+    /// # Safety
+    /// `proxy_ptr` must be a valid pointer to a `ProxyBase` previously created with `create_proxy`.
+    /// The returned pointer remains valid only as long as the proxy remains alive.
+    unsafe fn get_method_from_proxy(
+        &self,
+        proxy_ptr: *mut ProxyBase,
+        interface_id: &str,
+        method_id: &str,
+    ) -> *mut ProxyMethodBinding;
+
+    /// # Safety
+    /// `skeleton_ptr` must be a valid pointer to a `SkeletonBase` previously created with
+    /// `create_skeleton`. The returned pointer remains valid only as long as the skeleton remains alive.
+    unsafe fn get_method_from_skeleton(
+        &self,
+        skeleton_ptr: *mut SkeletonBase,
+        interface_id: &str,
+        method_id: &str,
+    ) -> *mut SkeletonMethodBinding;
+
+    /// Retrieve the in-arguments buffer for a proxy method call at the given queue position.
+    ///
+    /// Returns `Some((data_ptr, len))` on success, `None` on failure (including: the method has no
+    /// in-arguments at all, which the caller must already know from the method's static `Args` type — see
+    /// the C++-side doc comment on `mw_com_proxy_method_get_in_args_buffer`).
+    ///
+    /// # Safety
+    /// `binding` must be a valid pointer obtained from `get_method_from_proxy`. The returned buffer must
+    /// be filled with argument data serialized using the exact same byte layout the C++ binding expects
+    /// (see `score_com_concept::MethodArgsCodec`) before `proxy_method_do_call` is
+    /// called for the same `queue_position`.
+    unsafe fn proxy_method_get_in_args_buffer(
+        &self,
+        binding: *mut ProxyMethodBinding,
+        queue_position: usize,
+    ) -> Option<(*mut u8, usize)>;
+
+    /// Retrieve the return-value buffer for a proxy method call at the given queue position.
+    ///
+    /// Returns `Some((data_ptr, len))` on success, `None` on failure (including: the method has a `void`
+    /// return type).
+    ///
+    /// # Safety
+    /// `binding` must be a valid pointer obtained from `get_method_from_proxy`.
+    unsafe fn proxy_method_get_return_value_buffer(
+        &self,
+        binding: *mut ProxyMethodBinding,
+        queue_position: usize,
+    ) -> Option<(*mut u8, usize)>;
+
+    /// Perform the actual method call at the given queue position. Synchronous: blocks until the call
+    /// completes (this milestone only supports the sync-wrapped-in-an-already-resolved-`Future` shape; see
+    /// `method.rs`'s module doc comment).
+    ///
+    /// # Safety
+    /// `binding` must be a valid pointer obtained from `get_method_from_proxy`. If the method has
+    /// in-arguments, `proxy_method_get_in_args_buffer` must have been called and the buffer filled first.
+    /// If the method has a non-`void` return type, `proxy_method_get_return_value_buffer` must have been
+    /// called first (matching `ProxyMethod<Signature>::operator()`'s own ordering on the C++ side).
+    unsafe fn proxy_method_do_call(&self, binding: *mut ProxyMethodBinding, queue_position: usize) -> bool;
+
+    /// Register `handler` as the callback invoked whenever a proxy calls this skeleton method.
+    ///
+    /// # Safety
+    /// `binding` must be a valid pointer obtained from `get_method_from_skeleton`. `handler` must be a
+    /// valid `FatPtr` referencing a closure compatible with the flattened callback signature documented on
+    /// `mw_com_impl_call_method_handler`, and must remain valid for as long as the method binding is alive
+    /// (see that C++ function's doc comment for a known handler-disposal gap in this milestone).
+    unsafe fn skeleton_method_register_handler(
+        &self,
+        binding: *mut SkeletonMethodBinding,
+        handler: &FatPtr,
+    ) -> bool;
+
+    // --- Field subscription query FFI (added this fork, 2026-09-08). A Field's WithNotifier
+    // subscription is a real ProxyEvent/ProxyEventBase under the hood (see
+    // mw_com_proxy_event_get_free_sample_count's C++-side doc comment), so these two just extend
+    // event support with queries plain events never needed before.
+
+    /// # Safety
+    /// `event_ptr` must be a valid pointer to a `ProxyEventBase` obtained from `get_event_from_proxy`.
+    unsafe fn proxy_event_get_free_sample_count(&self, event_ptr: *mut ProxyEventBase) -> usize;
+
+    /// Returns `None` if the underlying C++ query failed (`Result<size_t>` returning an error),
+    /// `Some(count)` on success.
+    ///
+    /// # Safety
+    /// `event_ptr` must be a valid pointer to a `ProxyEventBase` obtained from `get_event_from_proxy`.
+    unsafe fn proxy_event_get_num_new_samples_available(&self, event_ptr: *mut ProxyEventBase) -> Option<usize>;
 }
 
 /// Fat pointer: binary representation of a Rust `dyn` trait object (vtable + data pointer).
@@ -396,6 +493,36 @@ pub struct SkeletonEventBase {
 impl Debug for SkeletonEventBase {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkeletonEventBase").finish()
+    }
+}
+
+/// Opaque C++ type: `score::mw::com::impl::ProxyMethodBinding` (score/mw/com/impl/methods/proxy_method_binding.h).
+/// Added this fork, 2026-09-08, alongside the ported PR #818 Rust Method<T>/Field<T> design. Already fully
+/// type-erased on the C++ side (operates on `score::cpp::span<std::byte>` + a queue position), so unlike
+/// `ProxyEventBase` this needs no accompanying `TypeOperations`-style per-type dispatch struct.
+#[repr(C)]
+#[derive(Default)]
+pub struct ProxyMethodBinding {
+    dummy: [u8; 0],
+}
+
+impl Debug for ProxyMethodBinding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyMethodBinding").finish()
+    }
+}
+
+/// Opaque C++ type: `score::mw::com::impl::SkeletonMethodBinding`
+/// (score/mw/com/impl/methods/skeleton_method_binding.h). See `ProxyMethodBinding`'s doc comment.
+#[repr(C)]
+#[derive(Default)]
+pub struct SkeletonMethodBinding {
+    dummy: [u8; 0],
+}
+
+impl Debug for SkeletonMethodBinding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkeletonMethodBinding").finish()
     }
 }
 

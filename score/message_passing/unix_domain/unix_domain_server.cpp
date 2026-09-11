@@ -77,8 +77,15 @@ score::cpp::expected_blank<score::os::Error> UnixDomainServer::ServerConnection:
     {
         return score::cpp::make_unexpected(score::os::Error::createFromErrno(EMSGSIZE));
     }
+    // Prototype for communication#767 (docs/design-notes.md §2.5): echo back whichever REQUEST's correlation id
+    // is currently active, so the client can match this reply to the right one of its (possibly several) pending
+    // calls on this connection, without IServerConnection::Reply()'s own signature needing to change.
+    score::cpp::pmr::vector<std::uint8_t> combined(server_.engine_->GetMemoryResource());
+    combined.reserve(message.size() + 1U);
+    combined.push_back(current_request_id_);
+    combined.insert(combined.end(), message.begin(), message.end());
     return server_.engine_->SendProtocolMessage(
-        endpoint_.fd, score::cpp::to_underlying(ServerToClient::REPLY), message);
+        endpoint_.fd, score::cpp::to_underlying(ServerToClient::REPLY), combined);
 }
 
 score::cpp::expected_blank<score::os::Error> UnixDomainServer::ServerConnection::Notify(
@@ -112,10 +119,26 @@ bool UnixDomainServer::ServerConnection::ProcessInput()
     switch (code)
     {
         case score::cpp::to_underlying(ClientToServer::REQUEST):
-            return (std::holds_alternative<HandlerPointerT>(user_data)
-                        ? std::get<HandlerPointerT>(user_data)->OnMessageSentWithReply(*this, message)
-                        : server_.sent_with_reply_callback_(*this, message))
-                .has_value();
+        {
+            if (message.empty())
+            {
+                // malformed: every REQUEST carries a leading correlation id byte in this prototype
+                return false;
+            }
+            const CorrelationId id = message[0];
+            const auto payload = message.subspan(1U);
+            // Save/restore rather than push/pop an explicit stack: dispatch is reentrant call-stack-nested
+            // (single-threaded per engine, see docs/design-notes.md §2.5), so this naturally unwinds correctly
+            // even if handling this REQUEST recurses into further nested REQUESTs before returning.
+            const CorrelationId previous_id = current_request_id_;
+            current_request_id_ = id;
+            const bool ok = (std::holds_alternative<HandlerPointerT>(user_data)
+                                 ? std::get<HandlerPointerT>(user_data)->OnMessageSentWithReply(*this, payload)
+                                 : server_.sent_with_reply_callback_(*this, payload))
+                                .has_value();
+            current_request_id_ = previous_id;
+            return ok;
+        }
 
         case score::cpp::to_underlying(ClientToServer::SEND):
             return (std::holds_alternative<HandlerPointerT>(user_data)

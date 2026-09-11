@@ -15,12 +15,8 @@ load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 rust_library(
     name = "com-api-runtime-lola",
-    srcs = [
-        "consumer.rs",
-        "lib.rs",
-        "producer.rs",
-        "runtime.rs",
-    ],
+    srcs = glob(["**/*.rs"]),
+    edition = "2024",
     visibility = ["//score/mw/com:__subpackages__"],
     deps = [
         "//score/mw/com/impl/plumbing/rust:sample_allocatee_ptr_rs",

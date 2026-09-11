@@ -17,6 +17,7 @@
 #include "score/message_passing/client_server_communication.h"
 #include "score/message_passing/mock/shared_resource_engine_mock.h"
 
+#include <algorithm>
 #include <future>
 #include <thread>
 
@@ -51,6 +52,9 @@ class ClientConnectionTest : public ::testing::Test
         EXPECT_CALL(*engine_, GetLogger()).Times(AtLeast(0)).WillRepeatedly(ReturnRef(logger_));
         EXPECT_CALL(*engine_, IsOnCallbackThread()).Times(AtLeast(0)).WillRepeatedly([&]() -> bool {
             return on_callback_thread_;
+        });
+        EXPECT_CALL(*engine_, SupportsNestedPump()).Times(AtLeast(0)).WillRepeatedly([&]() -> bool {
+            return supports_nested_pump_;
         });
     }
 
@@ -324,6 +328,7 @@ class ClientConnectionTest : public ::testing::Test
     ISharedResourceEngine::CommandCallback send_queue_command_callback_{};
     ISharedResourceEngine::PosixEndpointEntry* posix_endpoint_{};
     std::atomic<bool> on_callback_thread_{false};  // only atomic for tsan and sleep synchronization
+    bool supports_nested_pump_{false};
     std::thread background_thread_{};
     std::int32_t connection_delay_ms_{0};
 };
@@ -753,6 +758,45 @@ TEST_F(ClientConnectionTest, SendIsNotQueuedIfTrulyAsyncButNoSlots)
     StopCurrentConnection(connection);
 }
 
+TEST_F(ClientConnectionTest, SendWaitReplySucceedsWhenCalledInCallbackAndEngineSupportsNestedPump)
+{
+    ::testing::Test::RecordProperty(
+        "given",
+        "client connection established, a callback is executing on the callback thread, and the engine backend "
+        "supports nested pumping (e.g. UnixDomainEngine) - see eclipse-score/communication#767");
+    detail::ClientConnection connection(engine_, protocol_config_, client_config_);
+    MakeSuccessfulConnection(connection);
+
+    std::array<std::uint8_t, kMaxSendSize> send_buffer{};
+    std::array<std::uint8_t, kMaxReplySize> reply_buffer{};
+    const std::array<std::uint8_t, 3> reply_payload = {7, 8, 9};
+    // Prototype for communication#767 (docs/design-notes.md §2.5): every REPLY now carries a leading correlation
+    // id byte; 0 (kPrimaryCorrelationId) names this connection's one traditional slot, which is what a plain,
+    // non-nested-queued SendWaitReply() call like this one's own send always occupies.
+    const std::array<std::uint8_t, 4> wire_reply = {detail::kPrimaryCorrelationId, 7, 8, 9};
+
+    EXPECT_CALL(*engine_, SendProtocolMessage);
+    EXPECT_CALL(*engine_, PumpNestedIteration()).WillOnce([&]() {
+        AtProtocolReceive_Return(score::cpp::to_underlying(detail::ServerToClient::REPLY), wire_reply);
+        InvokeEndpointInput();
+    });
+
+    supports_nested_pump_ = true;
+    on_callback_thread_ = true;
+    ::testing::Test::RecordProperty("when",
+                                    "``SendWaitReply`` is called from within the callback, and the reply arrives "
+                                    "through one nested pump iteration");
+    auto send_wait_reply_result = connection.SendWaitReply(send_buffer, reply_buffer);
+    on_callback_thread_ = false;
+    ::testing::Test::RecordProperty("then", "call succeeds with the reply, instead of failing with ``EAGAIN``");
+    ASSERT_TRUE(send_wait_reply_result.has_value());
+    auto reply = send_wait_reply_result.value();
+    ASSERT_EQ(static_cast<std::size_t>(reply.size()), reply_payload.size());
+    EXPECT_TRUE(std::equal(reply.begin(), reply.end(), reply_payload.begin()));
+
+    StopCurrentConnection(connection);
+}
+
 TEST_F(ClientConnectionTest, SendWaitReplyFailsWhenCalledInCallback)
 {
     ::testing::Test::RecordProperty("lobster-tracing", "MessagePassing.SendBufferArgumentValidation");
@@ -916,7 +960,10 @@ TEST_F(ClientConnectionTest, SendWaitReplyFailsWhenReceiveTooLong)
 
     ::testing::Test::RecordProperty("when", "server sends a reply larger than ``kMaxReplySize``");
     EXPECT_CALL(*engine_, SendProtocolMessage).WillOnce([&](auto&&...) {
-        std::array<std::uint8_t, kMaxReplySize + 1> long_reply_buffer;
+        // +2, not +1: one byte is this prototype's leading correlation id (docs/design-notes.md §2.5), which
+        // ProcessInputEvent strips before the oversize check ever sees the payload.
+        std::array<std::uint8_t, kMaxReplySize + 2> long_reply_buffer{};
+        long_reply_buffer[0] = detail::kPrimaryCorrelationId;
         AtProtocolReceive_Return(score::cpp::to_underlying(detail::ServerToClient::REPLY), long_reply_buffer);
         InvokeEndpointInput();
         return score::cpp::blank{};

@@ -87,6 +87,28 @@ pub enum ReceiveFailedReason {
     BufferOverflow { max: usize },
 }
 
+/// Comprehensive error reasons for Method-related failures (calling a method on the consumer side, or
+/// registering/serving a handler for it on the producer side).
+///
+/// Added alongside this fork's FFI implementation of the ported PR #818 Rust Method<T>/Field<T> design
+/// (2026-09-08) — no equivalent existed before, since method.rs's `LolaMethodCaller`/`LolaMethodHandler`
+/// were pure `todo!()` placeholders with nothing to report a failure reason for yet.
+#[derive(Debug, ScoreDebug, Error)]
+pub enum MethodFailedReason {
+    #[error("Method caller creation failed, possibly because the proxy method binding could not be constructed")]
+    MethodCallerCreationFailed,
+    #[error("Method handler creation failed, possibly because the skeleton method binding could not be constructed")]
+    MethodHandlerCreationFailed,
+    #[error("Failed to retrieve the in-arguments buffer for a method call")]
+    InArgsBufferUnavailable,
+    #[error("Failed to retrieve the return-value buffer for a method call")]
+    ReturnValueBufferUnavailable,
+    #[error("The method call itself failed on the provider side")]
+    CallFailed,
+    #[error("Failed to register a handler for a method")]
+    HandlerRegistrationFailed,
+}
+
 /// Comprehensive error reasons for event-related failures
 #[derive(Debug, ScoreDebug, Error)]
 pub enum EventFailedReason {
@@ -119,4 +141,6 @@ pub enum Error {
     AllocateError(AllocationFailureReason),
     #[error("Receive operation failed due to: {0}")]
     ReceiveError(ReceiveFailedReason),
+    #[error("Method operation failed due to: {0}")]
+    MethodError(MethodFailedReason),
 }

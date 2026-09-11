@@ -43,6 +43,22 @@ class ISharedResourceEngine
 
     virtual bool IsOnCallbackThread() const noexcept = 0;
 
+    /// \brief Whether this engine backend can service PumpNestedIteration() calls.
+    /// \details Engines that dispatch both the reply-completion path and the server-callback path on one and the
+    /// same thread (e.g. UnixDomainEngine) need this to let a SendWaitReply() call made from within a callback
+    /// make progress instead of deadlocking. Engines that already dispatch those on separate threads don't need
+    /// it and keep the default of rejecting such nested calls outright. Defaults to false.
+    virtual bool SupportsNestedPump() const noexcept
+    {
+        return false;
+    }
+
+    /// \brief Run one iteration of this engine's own dispatch loop (due timers, one I/O poll pass, and dispatch of
+    /// whatever endpoints became ready), so that a nested/reentrant blocking call already running on the engine's
+    /// own callback thread can make progress instead of parking that same thread forever.
+    /// \pre Only called when IsOnCallbackThread() is true and SupportsNestedPump() is true.
+    virtual void PumpNestedIteration() noexcept {}
+
     virtual score::cpp::expected<std::int32_t, score::os::Error> TryOpenClientConnection(
         std::string_view identifier) noexcept = 0;
 

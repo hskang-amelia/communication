@@ -15,6 +15,7 @@
 
 #include "score/message_passing/i_server.h"
 
+#include "score/message_passing/client_server_communication.h"
 #include "score/message_passing/i_server_connection.h"
 #include "score/message_passing/unix_domain/unix_domain_engine.h"
 #include "score/message_passing/unix_domain/unix_domain_server_factory.h"
@@ -57,6 +58,11 @@ class UnixDomainServer final : public IServer
         std::int32_t fd_;
         ISharedResourceEngine::PosixEndpointEntry endpoint_;
         score::cpp::pmr::unique_ptr<ServerConnection> self_;
+        // Prototype for communication#767 (docs/design-notes.md §2.5): correlation id of whichever REQUEST is
+        // currently being handled, so Reply() can echo it back automatically. Saved/restored around each
+        // handler invocation in ProcessInput() rather than kept in a stack, relying on dispatch being naturally
+        // reentrant call-stack-nested (single-threaded per engine) rather than genuinely concurrent.
+        CorrelationId current_request_id_{kPrimaryCorrelationId};
     };
 
     UnixDomainServer(std::shared_ptr<UnixDomainEngine> engine,

@@ -33,7 +33,86 @@ constexpr std::int32_t kConnectRetryT = 3;  // new_delay = prev_delay * (1 + 1/T
 constexpr std::int32_t kConnectRetryMsMax = 5000;
 
 constexpr std::chrono::milliseconds kConnectIpcWarningDelay{20};
+
+// Bounds how many SendWaitReply() calls may nest on the same engine callback thread (see
+// ClientConnection::SendWaitReply's nested-pump path), so a genuine unbounded call cycle fails fast with ELOOP
+// instead of growing the C++ call stack without limit. thread_local because, on engines with SupportsNestedPump(),
+// every level of nesting runs as a deeper stack frame on the one engine thread that owns this counter.
+constexpr std::size_t kMaxNestedSendWaitReplyDepth = 8;
+thread_local std::size_t g_nested_send_wait_reply_depth{0};
+
+class NestedDepthGuard
+{
+  public:
+    NestedDepthGuard() noexcept
+    {
+        ++g_nested_send_wait_reply_depth;
+    }
+    ~NestedDepthGuard() noexcept
+    {
+        --g_nested_send_wait_reply_depth;
+    }
+    NestedDepthGuard(const NestedDepthGuard&) = delete;
+    NestedDepthGuard(NestedDepthGuard&&) = delete;
+    NestedDepthGuard& operator=(const NestedDepthGuard&) = delete;
+    NestedDepthGuard& operator=(NestedDepthGuard&&) = delete;
+};
 }  // namespace
+
+score::cpp::pmr::vector<std::uint8_t> ClientConnection::BuildCorrelatedMessage(
+    CorrelationId id,
+    score::cpp::span<const std::uint8_t> message) const
+{
+    score::cpp::pmr::vector<std::uint8_t> buffer(engine_->GetMemoryResource());
+    buffer.reserve(message.size() + 1U);
+    buffer.push_back(id);
+    buffer.insert(buffer.end(), message.begin(), message.end());
+    return buffer;
+}
+
+std::size_t ClientConnection::FindFreeNestedSlotUnderLock() const noexcept
+{
+    for (std::size_t i = 0; i < pending_nested_calls_.size(); ++i)
+    {
+        if (!pending_nested_calls_[i].active)
+        {
+            return i;
+        }
+    }
+    return pending_nested_calls_.size();
+}
+
+bool ClientConnection::ResolvePendingCallUnderLock(
+    std::unique_lock<std::mutex>& lock,
+    CorrelationId id,
+    score::cpp::expected<score::cpp::span<const std::uint8_t>, score::os::Error> message_expected) noexcept
+{
+    if (id == kPrimaryCorrelationId)
+    {
+        if (!waiting_for_reply_.has_value())
+        {
+            return false;
+        }
+        ReplyCallback callback = std::move(*waiting_for_reply_);
+        waiting_for_reply_.reset();
+        ProcessSendQueueUnderLock(lock);
+        lock.unlock();
+        callback(message_expected);
+        return true;
+    }
+    for (auto& slot : pending_nested_calls_)
+    {
+        if (slot.active && (slot.id == id))
+        {
+            ReplyCallback callback = std::move(slot.callback);
+            slot.active = false;
+            lock.unlock();
+            callback(message_expected);
+            return true;
+        }
+    }
+    return false;
+}
 
 ClientConnection::ClientConnection(std::shared_ptr<ISharedResourceEngine> engine,
                                    const ServiceProtocolConfig& protocol_config,
@@ -149,9 +228,17 @@ score::cpp::expected<score::cpp::span<const std::uint8_t>, score::os::Error> Cli
     score::cpp::span<const std::uint8_t> message,
     score::cpp::span<std::uint8_t> reply) noexcept
 {
-    if (IsInCallback())
+    const bool is_nested_call = IsInCallback();
+    if (is_nested_call)
     {
-        return score::cpp::make_unexpected(score::os::Error::createFromErrno(EAGAIN));
+        if (!engine_->SupportsNestedPump())
+        {
+            return score::cpp::make_unexpected(score::os::Error::createFromErrno(EAGAIN));
+        }
+        if (g_nested_send_wait_reply_depth >= kMaxNestedSendWaitReplyDepth)
+        {
+            return score::cpp::make_unexpected(score::os::Error::createFromErrno(ELOOP));
+        }
     }
     if (message.size() > max_send_size_)
     {
@@ -188,25 +275,54 @@ score::cpp::expected<score::cpp::span<const std::uint8_t>, score::os::Error> Cli
     std::unique_lock<std::mutex> lock(send_mutex_);
     if (waiting_for_reply_.has_value())
     {
-        // TODO: avoid copying the message
-
-        // Suppress "AUTOSAR C++14 A5-1-4" rule finding: "A lambda expression object shall not outlive any of its
-        // reference-captured objects.".
-        // Either the callback is destructed inside the TryQueueMessage call, or it is queued and then fired only once
-        // unblocking the send_condition_ while holding send_mutex_. We don't access the referenced values after
-        // the send_condition_ is unblocked and we don't leave the SendWaitReply function scope before it's unblocked.
-        // coverity[autosar_cpp14_a5_1_4_violation]
-        if (!TryQueueMessage(message, std::move(callback)))
+        if (is_nested_call)
         {
-            return score::cpp::make_unexpected(score::os::Error::createFromErrno(ENOBUFS));
+            // Prototype for communication#767 (docs/design-notes.md §2.5): rather than queuing behind the
+            // primary slot (which a nested call could never safely wait on, see §2.3's EDEADLK finding), try one
+            // of a small number of additional, independently-correlated slots instead.
+            const std::size_t slot_index = FindFreeNestedSlotUnderLock();
+            if (slot_index == pending_nested_calls_.size())
+            {
+                // Every slot (primary and auxiliary) is genuinely busy - still fail fast rather than queue.
+                return score::cpp::make_unexpected(score::os::Error::createFromErrno(EDEADLK));
+            }
+            const CorrelationId id = static_cast<CorrelationId>(slot_index + 1U);
+            pending_nested_calls_[slot_index] = {true, id, std::move(callback)};
+            lock.unlock();
+            const auto combined = BuildCorrelatedMessage(id, message);
+            const auto expected =
+                engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), combined);
+            lock.lock();
+            if (!expected.has_value())
+            {
+                pending_nested_calls_[slot_index].active = false;
+                return score::cpp::make_unexpected(expected.error());
+            }
+        }
+        else
+        {
+            // TODO: avoid copying the message
+
+            // Suppress "AUTOSAR C++14 A5-1-4" rule finding: "A lambda expression object shall not outlive any of
+            // its reference-captured objects.".
+            // Either the callback is destructed inside the TryQueueMessage call, or it is queued and then fired
+            // only once unblocking the send_condition_ while holding send_mutex_. We don't access the referenced
+            // values after the send_condition_ is unblocked and we don't leave the SendWaitReply function scope
+            // before it's unblocked.
+            // coverity[autosar_cpp14_a5_1_4_violation]
+            if (!TryQueueMessage(message, std::move(callback)))
+            {
+                return score::cpp::make_unexpected(score::os::Error::createFromErrno(ENOBUFS));
+            }
         }
     }
     else
     {
         waiting_for_reply_ = std::move(callback);
         lock.unlock();
+        const auto combined = BuildCorrelatedMessage(kPrimaryCorrelationId, message);
         const auto expected =
-            engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), message);
+            engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), combined);
         lock.lock();
         if (!expected.has_value())
         {
@@ -225,7 +341,22 @@ score::cpp::expected<score::cpp::span<const std::uint8_t>, score::os::Error> Cli
     }
     lock.unlock();
 
-    future.Wait();
+    if (is_nested_call)
+    {
+        // We're already running on the engine's own callback thread (e.g. inside a SkeletonMethod handler) - the
+        // only thread that could ever process the incoming reply and unblock future.Wait(). So instead of parking
+        // this thread, keep pumping the engine's own dispatch loop (which is exactly what would otherwise process
+        // that reply) until it arrives - or until a connection failure/stop resolves the future some other way.
+        const NestedDepthGuard depth_guard{};
+        while (!future.IsReady())
+        {
+            engine_->PumpNestedIteration();
+        }
+    }
+    else
+    {
+        future.Wait();
+    }
     return result;
 }
 
@@ -260,8 +391,9 @@ score::cpp::expected_blank<score::os::Error> ClientConnection::SendWithCallback(
     }
     else
     {
+        const auto combined = BuildCorrelatedMessage(kPrimaryCorrelationId, message);
         const auto expected =
-            engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), message);
+            engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), combined);
         if (!expected.has_value())
         {
             return score::cpp::make_unexpected(expected.error());
@@ -472,16 +604,16 @@ IClientConnection::StopReason ClientConnection::ProcessInputEvent() noexcept
     {
         case score::cpp::to_underlying(ServerToClient::REPLY):
         {
-            std::unique_lock<std::mutex> lock{send_mutex_};
-            if (waiting_for_reply_.has_value())
+            if (message.empty())
             {
-                ReplyCallback callback = std::move(*waiting_for_reply_);
-                waiting_for_reply_.reset();
-                ProcessSendQueueUnderLock(lock);
-                lock.unlock();
-                callback(message);
+                // malformed: every REPLY carries a leading correlation id byte in this prototype
+                return StopReason::kIoError;
             }
-            else
+            const CorrelationId id = message[0];
+            const auto payload = message.subspan(1U);
+            std::unique_lock<std::mutex> lock{send_mutex_};
+            const bool resolved = ResolvePendingCallUnderLock(lock, id, payload);
+            if (!resolved && (id == kPrimaryCorrelationId))
             {
                 return StopReason::kIoError;
             }
@@ -539,8 +671,9 @@ void ClientConnection::ProcessSendQueueUnderLock(std::unique_lock<std::mutex>& l
             // temporarily, as the other side of SendProtocolMessage is not under our control and it may cause
             // indefinite delay.
             lock.unlock();
-            const auto expected = engine_->SendProtocolMessage(
-                client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), send.message);
+            const auto combined = BuildCorrelatedMessage(kPrimaryCorrelationId, send.message);
+            const auto expected =
+                engine_->SendProtocolMessage(client_fd_, score::cpp::to_underlying(ClientToServer::REQUEST), combined);
             lock.lock();
             send_pool_.push_front(send);
             if (expected.has_value())

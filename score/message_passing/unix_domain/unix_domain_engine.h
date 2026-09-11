@@ -112,6 +112,13 @@ class UnixDomainEngine final : public ISharedResourceEngine
         return std::this_thread::get_id() == thread_.get_id();
     }
 
+    bool SupportsNestedPump() const noexcept override
+    {
+        return true;
+    }
+
+    void PumpNestedIteration() noexcept override;
+
   private:
     enum class PipeEvent : uint8_t
     {

@@ -29,7 +29,7 @@
 //TODO: revist this once com-api is stable - Ticket-234827
 #![allow(clippy::needless_lifetimes)]
 
-use crate::Debug;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
@@ -39,9 +39,9 @@ use std::sync::Arc;
 use score_log as log;
 
 use score_com_concept::{
-    AllocationFailureReason, Builder, CommData, Error, EventFailedReason, InstanceSpecifier,
-    Interface, Producer, ProducerBuilder, ProducerFailedReason, ProviderInfo, Publisher, Result,
-    SampleMaybeUninit, SampleMut, ServiceFailedReason,
+    AllocationFailureReason, Builder, CommData, Error, EventFailedReason, EventSampleMut,
+    InstanceSpecifier, Interface, Producer, ProducerBuilder, ProducerFailedReason, ProviderInfo,
+    Publisher, Result, SampleMaybeUninit, SampleMut, ServiceFailedReason,
 };
 
 use bridge_ffi_rs::*;
@@ -99,6 +99,52 @@ impl<B: FFIBridge> ProviderInfo for LolaProviderInfo<B> {
             self.instance_specifier.as_ref()
         );
         Ok(())
+    }
+}
+
+impl<B: FFIBridge> LolaProviderInfo<B> {
+    /// The interface UID this provider instance offers.
+    ///
+    /// `pub(crate)` (added alongside `method.rs`'s FFI implementation, 2026-09-08):
+    /// `LolaMethodHandler::new` needs this, in the same crate but a different module, to look up its
+    /// `SkeletonMethodBinding` via `FFIBridge::get_method_from_skeleton`.
+    pub(crate) fn interface_id(&self) -> &'static str {
+        self.interface_id
+    }
+
+    /// The FFI bridge this provider instance was created through.
+    pub(crate) fn bridge(&self) -> &B {
+        &self.bridge
+    }
+
+    /// Raw `SkeletonBase*` for this provider's shared skeleton instance, valid for as long as this
+    /// `LolaProviderInfo` (or a clone of it — `skeleton_handle` is `Arc`-backed, see
+    /// `SkeletonInstanceManager`) is alive.
+    ///
+    /// `pub(crate)` for the same reason as `interface_id()`/`bridge()` above. Deliberately narrow (a
+    /// raw pointer getter only), mirroring `offer_service`/`stop_offer_service` above which already
+    /// reach into `self.skeleton_handle.0.handle` the same way from within this module.
+    pub(crate) fn skeleton_ptr(&self) -> *mut SkeletonBase {
+        self.skeleton_handle.0.handle.as_ptr()
+    }
+
+    /// Test-only constructor: `LolaProviderInfo`'s fields are private to this module, so
+    /// `field_producer.rs`'s own test module (a sibling, not a descendant, of this one) has no other
+    /// way to build one for its `LolaFieldPublisher::_provider` field. Mirrors this module's own
+    /// `test::make_provider_info` helper, just exposed one level up so it can be shared.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        instance_specifier: InstanceSpecifier,
+        interface_id: &'static str,
+        skeleton_handle: SkeletonInstanceManager<B>,
+        bridge: B,
+    ) -> Self {
+        Self {
+            instance_specifier,
+            interface_id,
+            skeleton_handle,
+            bridge,
+        }
     }
 }
 
@@ -204,7 +250,9 @@ where
     }
 }
 
-impl<'a, T, B: FFIBridge> SampleMut<T> for LolaSampleMut<'a, T, B>
+impl<'a, T, B: FFIBridge> SampleMut<T> for LolaSampleMut<'a, T, B> where T: CommData + Debug {}
+
+impl<'a, T, B: FFIBridge> EventSampleMut<T> for LolaSampleMut<'a, T, B>
 where
     T: CommData + Debug,
 {
@@ -531,9 +579,9 @@ impl<I: Interface, B: FFIBridge> Builder<I::Producer<LolaRuntimeImpl<B>>>
 mod test {
     use super::*;
     use bridge_ffi_mock::{MockFFIBridge, MockPointerAllocator, SharedMockBridge};
-    use score_com_concept::{InstanceSpecifier};
     use mockall::predicate::*;
     use mockall::Sequence;
+    use score_com_concept::InstanceSpecifier;
 
     #[derive(Debug, Default)]
     #[repr(C)]
@@ -560,13 +608,12 @@ mod test {
         interface_id: &'static str,
         bridge: &SharedMockBridge,
     ) -> LolaProviderInfo<SharedMockBridge> {
-        LolaProviderInfo {
-            instance_specifier: InstanceSpecifier::new("/test_instance")
-                .expect("valid instance specifier"),
+        LolaProviderInfo::new_for_test(
+            InstanceSpecifier::new("/test_instance").expect("valid instance specifier"),
             interface_id,
-            skeleton_handle: SkeletonInstanceManager(Arc::new(make_skeleton_handle(&bridge))),
-            bridge: bridge.clone(),
-        }
+            SkeletonInstanceManager(Arc::new(make_skeleton_handle(&bridge))),
+            bridge.clone(),
+        )
     }
 
     #[test]

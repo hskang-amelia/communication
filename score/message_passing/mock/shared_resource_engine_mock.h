@@ -26,6 +26,8 @@ class SharedResourceEngineMock : public ISharedResourceEngine
     MOCK_METHOD(score::cpp::pmr::memory_resource*, GetMemoryResource, (), (noexcept, override));
     MOCK_METHOD(const LoggingCallback&, GetLogger, (), (ref(&), noexcept, override));
     MOCK_METHOD(bool, IsOnCallbackThread, (), (const, noexcept, override));
+    MOCK_METHOD(bool, SupportsNestedPump, (), (const, noexcept, override));
+    MOCK_METHOD(void, PumpNestedIteration, (), (noexcept, override));
     MOCK_METHOD((score::cpp::expected<std::int32_t, score::os::Error>),
                 TryOpenClientConnection,
                 (std::string_view identifier),

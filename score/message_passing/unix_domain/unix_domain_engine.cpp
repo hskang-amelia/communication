@@ -321,22 +321,27 @@ void UnixDomainEngine::RunOnThread() noexcept
 
     while (!quit_flag_)
     {
-        std::int32_t timeout = ProcessTimerQueue();
-        const auto num_expected = os_resources_.poll->poll(poll_fds_.data(), poll_fds_.size(), timeout);
-        if ((num_expected.has_value()) && (num_expected.value() > 0))
-        {
-            for (std::size_t i = 0; i < poll_fds_.size(); ++i)
-            {
-                if (poll_fds_[i].revents != 0)
-                {
-                    PosixEndpointEntry& endpoint = *poll_endpoints_[i];
-                    endpoint.input();
-                }
-            }
-        }
+        PumpNestedIteration();
     }
 
     UnregisterPosixEndpoint(command_endpoint_);
+}
+
+void UnixDomainEngine::PumpNestedIteration() noexcept
+{
+    std::int32_t timeout = ProcessTimerQueue();
+    const auto num_expected = os_resources_.poll->poll(poll_fds_.data(), poll_fds_.size(), timeout);
+    if ((num_expected.has_value()) && (num_expected.value() > 0))
+    {
+        for (std::size_t i = 0; i < poll_fds_.size(); ++i)
+        {
+            if (poll_fds_[i].revents != 0)
+            {
+                PosixEndpointEntry& endpoint = *poll_endpoints_[i];
+                endpoint.input();
+            }
+        }
+    }
 }
 
 std::int32_t UnixDomainEngine::ProcessTimerQueue() noexcept

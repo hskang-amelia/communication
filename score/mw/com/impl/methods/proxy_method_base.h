@@ -127,6 +127,16 @@ class ProxyMethodBaseView
         return base_.binding_construction_result_;
     }
 
+    // Added (this fork, 2026-09-08) to give the rust com-api FFI registry (registry_bridge_macro.h)
+    // a way to reach the type-erased ProxyMethodBinding* underneath a generated Proxy's
+    // ProxyMethod<Signature> member, exactly mirroring what SkeletonMethodBaseView::GetMethodBinding()
+    // already does for the skeleton side. unique_ptr<T>::get() returns a non-const T* even when
+    // called through a const unique_ptr, so no const_cast is needed here.
+    [[nodiscard]] ProxyMethodBinding* GetMethodBinding() const
+    {
+        return base_.binding_.get();
+    }
+
   private:
     const ProxyMethodBase& base_;
 };

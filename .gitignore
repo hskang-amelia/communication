@@ -23,3 +23,8 @@ ubproject.toml
 cpp_coverage_linux/
 cpp_coverage_qnx/
 __pycache__/
+
+# Local reference copies of the AUTOSAR specifications - read them alongside
+# the tree, don't commit them. See docs/design-notes.md §3.0.
+AUTOSAR_*.pdf
+AUTOSAR_*.arxml

@@ -13,6 +13,7 @@
 #ifndef SCORE_LIB_MESSAGE_PASSING_CLIENT_CONNECTION_H
 #define SCORE_LIB_MESSAGE_PASSING_CLIENT_CONNECTION_H
 
+#include "score/message_passing/client_server_communication.h"
 #include "score/message_passing/i_client_connection.h"
 #include "score/message_passing/i_client_factory.h"
 #include "score/message_passing/i_shared_resource_engine.h"
@@ -20,6 +21,7 @@
 #include <score/string.hpp>
 #include <score/vector.hpp>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -27,6 +29,12 @@
 
 namespace score::message_passing::detail
 {
+
+// Prototype for communication#767 (docs/design-notes.md §2.5): how many *additional*, auxiliary calls a nested
+// SendWaitReply() can have in flight on one connection at once, on top of the one traditional "primary" slot
+// (waiting_for_reply_). A real implementation would likely make this a client_config_ knob; fixed here to keep
+// the prototype's bookkeeping simple.
+constexpr std::size_t kMaxNestedPendingCalls = 4;
 
 class ClientConnection final : public IClientConnection
 {
@@ -64,6 +72,21 @@ class ClientConnection final : public IClientConnection
     void TryConnect() noexcept;
     bool TryQueueMessage(score::cpp::span<const std::uint8_t> message, ReplyCallback callback) noexcept;
     StopReason ProcessInputEvent() noexcept;
+
+    // Prototype additions for communication#767, see kMaxNestedPendingCalls above.
+    // The lock shall be already taken; may find no free slot (returns kMaxNestedPendingCalls).
+    std::size_t FindFreeNestedSlotUnderLock() const noexcept;
+    // Builds a small owned buffer holding `id` followed by `message`'s bytes.
+    score::cpp::pmr::vector<std::uint8_t> BuildCorrelatedMessage(CorrelationId id,
+                                                                 score::cpp::span<const std::uint8_t> message) const;
+    // Resolves whichever pending call (primary or nested) `id` names, with `message` (already stripped of the
+    // leading id byte). Returns whether `id` named an active call; the lock shall be already taken, and is left
+    // unlocked if it did (matching the pre-existing REPLY-handling convention of unlocking before invoking a
+    // user callback).
+    bool ResolvePendingCallUnderLock(
+        std::unique_lock<std::mutex>& lock,
+        CorrelationId id,
+        score::cpp::expected<score::cpp::span<const std::uint8_t>, score::os::Error> message_expected) noexcept;
 
     // The lock shall be already taken.
     // The function may release it, call a user callback, and then lock it again.
@@ -132,6 +155,15 @@ class ClientConnection final : public IClientConnection
     score::containers::intrusive_list<SendCommand> send_queue_;
 
     std::optional<ReplyCallback> waiting_for_reply_;
+
+    // Prototype for communication#767, see kMaxNestedPendingCalls above.
+    struct PendingNestedCall
+    {
+        bool active{false};
+        CorrelationId id{kPrimaryCorrelationId};
+        ReplyCallback callback{};
+    };
+    std::array<PendingNestedCall, kMaxNestedPendingCalls> pending_nested_calls_{};
 
     ISharedResourceEngine::CommandQueueEntry connection_timer_;
     ISharedResourceEngine::CommandQueueEntry disconnection_command_;

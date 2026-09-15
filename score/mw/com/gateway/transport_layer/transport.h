@@ -13,18 +13,37 @@
 #ifndef SCORE_MW_COM_GATEWAY_TRANSPORT_LAYER_TRANSPORT_H
 #define SCORE_MW_COM_GATEWAY_TRANSPORT_LAYER_TRANSPORT_H
 
+#include "score/mw/com/gateway/transport_layer/transport_error.h"
 #include "score/mw/com/impl/service_element_type.h"
 #include "score/mw/com/types.h"
 #include "score/result/result.h"
 
 #include <score/span.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace score::mw::com::gateway
 {
+
+/// \brief Binding-agnostic view onto a single event/field sample update, used to explicitly forward payload bytes
+/// between gateway instances when the transport layer does not support memory sharing (see
+/// IsMemorySharingSupported()).
+/// \details Deliberately holds only a raw, non-owning view onto the already-serialized sample bytes plus the
+/// identifying information needed to copy them into the correct destination slot. It carries no assumption about how
+/// the transport layer implementation gets these bytes across the wire.
+struct SamplePayload
+{
+    /// \brief name of the service element (event/field) this sample belongs to.
+    std::string element_name;
+    /// \brief type of the service element (event, field, method). Currently only EVENT is supported.
+    impl::ServiceElementType element_type;
+    /// \brief non-owning view onto the sample bytes to forward. Only valid for the duration of the call it is
+    /// passed to (e.g. ForwardSamples()).
+    score::cpp::span<const std::byte> data;
+};
 
 /// \brief Abstract base class for gateway transport layer implementations.
 class Transport
@@ -142,6 +161,27 @@ class Transport
                                                   impl::ServiceElementType element_type,
                                                   std::string element_name,
                                                   score::cpp::span<const std::uint8_t> sample_data);
+
+    /// \brief Forwards a batch of event/field sample updates to the destination gateway, an alternative to
+    /// ForwardSampleData() for a transport that wants to bulk multiple elements' updates (potentially across
+    /// different service instances) into a single round-trip.
+    /// \details EXPLORATORY (no concrete Transport implementation overrides this yet, this repo's DDS binding
+    /// included — it still forwards one sample at a time via ForwardSampleData()). Ported from
+    /// generalized_gateway/transport_layer/README.md's allocate-then-copy model (see GatewayCore::
+    /// AllocateSamples()/SendOrUpdateSamples()), which that doc's own maintainer flagged as possibly out of sync
+    /// with the real implementation — kept here as a starting point, not a finished design.
+    /// \param service_instance_specifier instance specifier of the service instance owning the updated elements.
+    /// \param samples collection of sample payloads to forward.
+    /// \return result indicating success or failure.
+    /// \note Default implementation returns TransportErrorc::kNotSupported. Transport implementations for which
+    /// IsMemorySharingSupported() always returns true do not need to override this API.
+    virtual score::Result<void> ForwardSamples(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                               std::vector<SamplePayload> samples)
+    {
+        static_cast<void>(service_instance_specifier);
+        static_cast<void>(samples);
+        return score::MakeUnexpected(TransportErrorc::kNotSupported);
+    }
 
     /// \brief Subscribes for actual sample data (not just update notifications) for a service element, on a
     /// transport that doesn't support memory sharing.

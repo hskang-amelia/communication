@@ -147,6 +147,13 @@ score::Result<void> DdsTransport::ProvideService(score::mw::com::InstanceSpecifi
             dds_delete(topic);
             return score::MakeUnexpected(TransportErrorc::kFailedToProvideService);
         }
+        // Required for IsMatched()/dds_get_publication_matched_status() below to actually track
+        // matches — confirmed the hard way: without this, current_count stayed 0 even after a
+        // real reader had matched and was successfully receiving samples (matching happens at the
+        // RTPS level regardless, but CycloneDDS only maintains the *local* matched-count
+        // bookkeeping dds_get_publication_matched_status() reads for statuses in the entity's own
+        // enabled set).
+        dds_set_status_mask(writer, DDS_PUBLICATION_MATCHED_STATUS);
         providers_[topic_name] = ProviderElement{topic, writer, 0U};
     }
     return {};
@@ -247,7 +254,11 @@ score::Result<void> DdsTransport::RegisterUpdateNotification(
         dds_delete(topic);
         return score::MakeUnexpected(TransportErrorc::kReceiveFailure);
     }
-    dds_set_status_mask(reader, DDS_DATA_AVAILABLE_STATUS);
+    // DDS_SUBSCRIPTION_MATCHED_STATUS alongside the pre-existing DDS_DATA_AVAILABLE_STATUS — same
+    // "required for the matched-count bookkeeping to actually update" reason as the writer's own
+    // dds_set_status_mask call above. dds_set_status_mask() replaces the mask outright, so this
+    // has to list both, not just add the new one.
+    dds_set_status_mask(reader, DDS_DATA_AVAILABLE_STATUS | DDS_SUBSCRIPTION_MATCHED_STATUS);
     dds_waitset_attach(waitset, reader, reader);
     consumers_[topic_name] = ConsumerElement{topic, reader, waitset};
     return {};

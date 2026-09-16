@@ -160,6 +160,34 @@ class Transport
     virtual score::Result<void> Unsubscribe(score::mw::com::InstanceSpecifier service_instance_specifier,
                                             impl::ServiceElementType element_type,
                                             std::string element_name);
+
+    /// \brief Blocks (up to timeout_ms) until a sample or update-only ping actually arrives for a subscribed
+    /// service element, on a transport that doesn't support memory sharing.
+    /// \details Subscribe()/RegisterUpdateNotification() only set up the registration — neither one gives a
+    /// caller a way to actually wait for the next arrival. Every copying-gateway transport implementation has to
+    /// solve this somehow (a select/poll loop, a waitset, ...); this promotes that capability from a
+    /// binding-specific extension (previously only on one concrete DDS implementation) onto Transport itself, so
+    /// callers that only need "send bytes, then block for the reply" don't have to depend on a concrete
+    /// transport class to get it.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to wait on.
+    /// \param timeout_ms maximum time to wait, in milliseconds.
+    /// \return true if a sample/ping was observed before the timeout, false on timeout or if this transport
+    /// doesn't support it (see the default implementation in transport.cpp).
+    virtual bool WaitForUpdate(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                               const std::string& element_name,
+                               std::uint32_t timeout_ms);
+
+    /// \brief Reads the last actual payload received for a subscribed service element (empty if the last sample
+    /// was a zero-length update-only ping, nothing has arrived yet, or this transport doesn't support it).
+    /// \details Paired with WaitForUpdate() — see that method's doc comment for why this pair is promoted here
+    /// instead of staying a binding-specific extension.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to read.
+    /// \return the last received payload, or an empty vector (see above).
+    virtual std::vector<std::uint8_t> TakeLastPayload(
+        const score::mw::com::InstanceSpecifier& service_instance_specifier,
+        const std::string& element_name);
 };
 
 }  // namespace score::mw::com::gateway

@@ -78,23 +78,17 @@ class DdsTransport final : public Transport
                                     impl::ServiceElementType element_type,
                                     std::string element_name) override;
 
-    /// \brief Binding-specific extension, not part of `Transport`: blocks (up to `timeout_ms`) until a
-    /// sample or update-only ping actually arrives on the given element's reader.
-    /// \details `Transport`'s abstract interface has no method for a consumer to actually observe an
-    /// incoming notification/sample — `RegisterUpdateNotification`/`Subscribe` only set up the
-    /// registration, they don't block waiting for data. Every real binding has to solve this
-    /// somehow; this is CycloneDDS's answer (a waitset), analogous to this repo's earlier `impl::
-    /// ITransportLayer` prototype's `WaitForUpdate` extension for the same reason.
-    /// \return `true` if a sample/ping was observed before the timeout, `false` on timeout.
+    /// \brief CycloneDDS's answer to `Transport::WaitForUpdate` — waits on a waitset for the given element's
+    /// reader.
     bool WaitForUpdate(const score::mw::com::InstanceSpecifier& service_instance_specifier,
                        const std::string& element_name,
-                       std::uint32_t timeout_ms);
+                       std::uint32_t timeout_ms) override;
 
-    /// \brief Binding-specific extension: reads the last actual payload received for a subscribed
-    /// element (empty if the last sample was a zero-length `NotifyUpdate` ping, or nothing has
-    /// arrived yet).
+    /// \brief CycloneDDS's answer to `Transport::TakeLastPayload` — reads the last sample taken from the given
+    /// element's reader (empty if the last sample was a zero-length `NotifyUpdate` ping, or nothing has arrived
+    /// yet).
     std::vector<std::uint8_t> TakeLastPayload(const score::mw::com::InstanceSpecifier& service_instance_specifier,
-                                              const std::string& element_name);
+                                              const std::string& element_name) override;
 
   private:
     struct ProviderElement

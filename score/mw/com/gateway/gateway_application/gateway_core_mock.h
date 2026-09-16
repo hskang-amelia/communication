@@ -42,6 +42,13 @@ class GatewayCoreMock : public GatewayCore
                 UnregisterUpdateNotification,
                 (score::mw::com::InstanceSpecifier, impl::ServiceElementType, std::string),
                 (override));
+    MOCK_METHOD((score::Result<void>),
+                ReceiveSampleData,
+                (score::mw::com::InstanceSpecifier,
+                 impl::ServiceElementType,
+                 std::string,
+                 score::cpp::span<const std::uint8_t>),
+                (override));
 };
 
 }  // namespace score::mw::com::gateway

@@ -188,6 +188,23 @@ class Transport
     virtual std::vector<std::uint8_t> TakeLastPayload(
         const score::mw::com::InstanceSpecifier& service_instance_specifier,
         const std::string& element_name);
+
+    /// \brief Returns whether this service element currently has at least one matched peer —
+    /// i.e. whether discovery has actually found a counterpart to send to/receive from yet.
+    /// \details A copying-gateway transport with no shared memory to fall back on can silently
+    /// lose a sample sent before discovery finishes matching the fresh writer/reader pair it was
+    /// just set up on (default QoS doesn't queue for a not-yet-matched peer) — confirmed the hard
+    /// way, not hypothetically: a fresh process's first send after `ProvideService`/`Subscribe`
+    /// reliably raced this and timed out. This lets a caller poll until it's actually safe to send
+    /// the first real message, the same role `sm_lm_control_wait_connected`
+    /// (state_management/sm-service/cpp/control_client_ffi.h) already plays for `ILmControl`'s
+    /// own asynchronous mw::com service discovery.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to check.
+    /// \return true once at least one peer is matched, false before that or if this transport
+    /// doesn't support it (see the default implementation in transport.cpp).
+    virtual bool IsMatched(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                           const std::string& element_name) const;
 };
 
 }  // namespace score::mw::com::gateway

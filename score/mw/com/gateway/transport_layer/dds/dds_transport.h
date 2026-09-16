@@ -90,6 +90,12 @@ class DdsTransport final : public Transport
     std::vector<std::uint8_t> TakeLastPayload(const score::mw::com::InstanceSpecifier& service_instance_specifier,
                                               const std::string& element_name) override;
 
+    /// \brief CycloneDDS's answer to `Transport::IsMatched` — `dds_get_publication_matched_status`/
+    /// `dds_get_subscription_matched_status` on whichever of this element's writer/reader this
+    /// process's role for it actually created.
+    bool IsMatched(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                   const std::string& element_name) const override;
+
   private:
     struct ProviderElement
     {

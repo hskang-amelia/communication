@@ -43,4 +43,18 @@ score::Result<void> Transport::Unsubscribe(score::mw::com::InstanceSpecifier /* 
     return score::MakeUnexpected(TransportErrorc::kNotSupported);
 }
 
+bool Transport::WaitForUpdate(const score::mw::com::InstanceSpecifier& /* service_instance_specifier */,
+                              const std::string& /* element_name */,
+                              std::uint32_t /* timeout_ms */)
+{
+    return false;
+}
+
+std::vector<std::uint8_t> Transport::TakeLastPayload(
+    const score::mw::com::InstanceSpecifier& /* service_instance_specifier */,
+    const std::string& /* element_name */)
+{
+    return {};
+}
+
 }  // namespace score::mw::com::gateway

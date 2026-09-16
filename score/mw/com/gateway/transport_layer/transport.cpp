@@ -57,4 +57,10 @@ std::vector<std::uint8_t> Transport::TakeLastPayload(
     return {};
 }
 
+bool Transport::IsMatched(const score::mw::com::InstanceSpecifier& /* service_instance_specifier */,
+                          const std::string& /* element_name */) const
+{
+    return false;
+}
+
 }  // namespace score::mw::com::gateway

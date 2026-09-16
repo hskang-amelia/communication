@@ -326,4 +326,30 @@ std::vector<std::uint8_t> DdsTransport::TakeLastPayload(
     return result;
 }
 
+bool DdsTransport::IsMatched(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                             const std::string& element_name) const
+{
+    const std::string topic_name = MakeTopicName(service_instance_specifier, element_name);
+
+    if (const auto it = providers_.find(topic_name); it != providers_.end())
+    {
+        dds_publication_matched_status_t status{};
+        if (dds_get_publication_matched_status(it->second.writer, &status) == DDS_RETCODE_OK &&
+            status.current_count > 0U)
+        {
+            return true;
+        }
+    }
+    if (const auto it = consumers_.find(topic_name); it != consumers_.end())
+    {
+        dds_subscription_matched_status_t status{};
+        if (dds_get_subscription_matched_status(it->second.reader, &status) == DDS_RETCODE_OK &&
+            status.current_count > 0U)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace score::mw::com::gateway::dds

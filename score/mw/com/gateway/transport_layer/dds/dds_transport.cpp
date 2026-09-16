@@ -147,13 +147,6 @@ score::Result<void> DdsTransport::ProvideService(score::mw::com::InstanceSpecifi
             dds_delete(topic);
             return score::MakeUnexpected(TransportErrorc::kFailedToProvideService);
         }
-        // Required for IsMatched()/dds_get_publication_matched_status() below to actually track
-        // matches — confirmed the hard way: without this, current_count stayed 0 even after a
-        // real reader had matched and was successfully receiving samples (matching happens at the
-        // RTPS level regardless, but CycloneDDS only maintains the *local* matched-count
-        // bookkeeping dds_get_publication_matched_status() reads for statuses in the entity's own
-        // enabled set).
-        dds_set_status_mask(writer, DDS_PUBLICATION_MATCHED_STATUS);
         providers_[topic_name] = ProviderElement{topic, writer, 0U};
     }
     return {};
@@ -254,11 +247,7 @@ score::Result<void> DdsTransport::RegisterUpdateNotification(
         dds_delete(topic);
         return score::MakeUnexpected(TransportErrorc::kReceiveFailure);
     }
-    // DDS_SUBSCRIPTION_MATCHED_STATUS alongside the pre-existing DDS_DATA_AVAILABLE_STATUS — same
-    // "required for the matched-count bookkeeping to actually update" reason as the writer's own
-    // dds_set_status_mask call above. dds_set_status_mask() replaces the mask outright, so this
-    // has to list both, not just add the new one.
-    dds_set_status_mask(reader, DDS_DATA_AVAILABLE_STATUS | DDS_SUBSCRIPTION_MATCHED_STATUS);
+    dds_set_status_mask(reader, DDS_DATA_AVAILABLE_STATUS);
     dds_waitset_attach(waitset, reader, reader);
     consumers_[topic_name] = ConsumerElement{topic, reader, waitset};
     return {};
@@ -342,20 +331,27 @@ bool DdsTransport::IsMatched(const score::mw::com::InstanceSpecifier& service_in
 {
     const std::string topic_name = MakeTopicName(service_instance_specifier, element_name);
 
+    // Deliberately `dds_get_matched_subscriptions`/`dds_get_matched_publications` (a plain
+    // introspection query, `rds`/`wrs` = nullptr and `n` = 0 to just get a count) rather than
+    // `dds_get_publication_matched_status`/`dds_get_subscription_matched_status` — the status-
+    // getter form needs `DDS_PUBLICATION_MATCHED_STATUS`/`DDS_SUBSCRIPTION_MATCHED_STATUS` enabled
+    // on the entity to track anything at all (confirmed the hard way: current_count stayed 0
+    // otherwise), but enabling `DDS_SUBSCRIPTION_MATCHED_STATUS` on the same reader `WaitForUpdate`
+    // attaches to a waitset poisons it — once matched, that status latches "triggered" and is never
+    // read/reset by anything on this reader's own waitset path, so `dds_waitset_wait` started
+    // returning immediately forever (confirmed the hard way too: 100% CPU in a real two-process
+    // run, `WaitForUpdate` no longer actually blocking). This form touches no status mask and
+    // leaves `WaitForUpdate`'s waitset exactly as before.
     if (const auto it = providers_.find(topic_name); it != providers_.end())
     {
-        dds_publication_matched_status_t status{};
-        if (dds_get_publication_matched_status(it->second.writer, &status) == DDS_RETCODE_OK &&
-            status.current_count > 0U)
+        if (dds_get_matched_subscriptions(it->second.writer, nullptr, 0U) > 0)
         {
             return true;
         }
     }
     if (const auto it = consumers_.find(topic_name); it != consumers_.end())
     {
-        dds_subscription_matched_status_t status{};
-        if (dds_get_subscription_matched_status(it->second.reader, &status) == DDS_RETCODE_OK &&
-            status.current_count > 0U)
+        if (dds_get_matched_publications(it->second.reader, nullptr, 0U) > 0)
         {
             return true;
         }

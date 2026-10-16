@@ -58,6 +58,7 @@ enable_testing()
 add_library(network_core STATIC
   "${NET_DIR}/core/wire_format.cpp"
   "${NET_DIR}/core/rpc_channel.cpp"
+  "${NET_DIR}/core/type_id_check.cpp"
   "${NET_DIR}/core/loopback_bus.cpp")
 target_include_directories(network_core PUBLIC "${REPO_ROOT}")
 target_compile_options(network_core PRIVATE ${STRICT_WARNINGS})
@@ -65,7 +66,8 @@ target_link_libraries(network_core PUBLIC Threads::Threads)
 
 add_executable(network_core_test
   "${NET_DIR}/core/wire_format_test.cpp"
-  "${NET_DIR}/core/rpc_channel_test.cpp")
+  "${NET_DIR}/core/rpc_channel_test.cpp"
+  "${NET_DIR}/core/type_id_check_test.cpp")
 target_compile_options(network_core_test PRIVATE ${STRICT_WARNINGS})
 target_link_libraries(network_core_test PRIVATE network_core GTest::gtest_main)
 add_test(NAME network_core_test COMMAND network_core_test)

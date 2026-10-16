@@ -210,7 +210,7 @@ class Event
 int RunSource(net::RpcChannel& channel, const Options& options, Event& registered)
 {
     const auto provide = channel.SendRequest(
-        net::ProvideService{"/test/svc", {{"evt", options.sample_size, 8U}, {"large", options.large_size, 8U}}});
+        net::ProvideService{"/test/svc", {{"evt", options.sample_size, 8U, "Evt@1"}, {"large", options.large_size, 8U}}});
     if (provide != net::ChannelStatus::kOk)
     {
         std::printf("RESULT {\"role\":\"source\",\"ok\":false,\"error\":\"provide: %s\"}\n", net::ToString(provide));
@@ -324,7 +324,8 @@ int main(int argc, char** argv)
         std::unique_lock<std::mutex> lock{state.mutex};
         if (const auto* provide = std::get_if<net::ProvideService>(&frame.body))
         {
-            state.provided = (provide->events.size() == 2U) && (provide->events[0].name == "evt");
+            state.provided = (provide->events.size() == 2U) && (provide->events[0].name == "evt") &&
+                             (provide->events[0].type_id == "Evt@1") && provide->events[1].type_id.empty();
             lock.unlock();
             // Nested request while the source is still blocked in SendRequest(ProvideService).
             const auto nested = channel.SendRequest(net::RegisterNotification{

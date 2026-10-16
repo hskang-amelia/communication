@@ -35,8 +35,10 @@ Skeleton writes them into its own shared memory.
 ```
 
 * **`core/`** — middleware- and mw::com-independent:
-  * `wire_format` — versioned little-endian frames: ProvideService (instance + event name/size/alignment),
-    OfferService, StopOfferService, (Un)RegisterNotification, UpdateNotification, EventSample, Ack.
+  * `wire_format` — versioned little-endian frames: ProvideService (instance + event name/size/alignment/type id),
+    OfferService, StopOfferService, (Un)RegisterNotification, UpdateNotification, EventSample, Ack. Version 2 added
+    the type id; version 1 frames are still decoded.
+  * `type_id_check` — compares the type id an event was provided with against the local configuration.
   * `rpc_channel` — requests are acked on reception and resent until acked; the receiver drops resends per peer
     session; inbound frames are dispatched in order on a dedicated thread. Same semantics as the sample hypervisor
     transport: an ack confirms delivery, not the result of the remote `GatewayCore` call.
@@ -65,6 +67,12 @@ pull APIs.
 * **Binary sample layout.** Samples are copied as the binary representation of the C++ data type (LoLa's in-memory
   format). Both gateways must use the same type definition, endianness and alignment rules. Proxy events with
   `HasSerializedFormat() == true` are not forwarded.
+* **Type identity.** The destination checks the sample size against the declared size, which does not catch a
+  same-size layout change (renamed or reordered members). Configure a type id per event in `type-check.type-ids`
+  (an opaque string, e.g. `"DriveMode@1.2"` or a hash of the generated type definition) on both gateways. A mismatch
+  always keeps the destination from providing the service and is logged there (`TypeIdRejections()`); a missing id is
+  logged and accepted with `"policy": "warn"` (default) and rejected with `"strict"`. The source only receives the
+  delivery Ack, so it is not told about a rejection.
 * **Events only.** Fields and methods are rejected (`kNotSupported`), like the rest of the gateway today.
 * **zenoh-pico frame size.** zenoh-pico's default build reassembles messages up to `FRAG_MAX_SIZE = 4096` bytes. Build
   it with a larger `FRAG_MAX_SIZE` (verified here with 4 MiB) and set `max-frame-size` accordingly; `Publish()` rejects
@@ -102,8 +110,8 @@ not guess module versions.
 
 | What | How | Result |
 |---|---|---|
-| Wire format, RpcChannel (26 tests: lost request/ack, duplicates, late peer, nested request while caller waits, full dispatch queue, peer restart, stop from the dispatcher and restart, 8 concurrent senders) | `test/standalone` CMake harness, `-Werror -Wconversion -Wsign-conversion -Wshadow` | pass; ThreadSanitizer 20× repeat clean; ASan+UBSan clean |
-| ZenohPicoBus, CycloneDdsBus against the real libraries, two processes, both start orders: ProvideService → nested RegisterNotification → 2000 × 256 B samples → 1 MiB sample → 200 request round trips → StopOffer | `test/standalone/run_two_process.py` | pass on both; 0 lost, 0 reordered, 0 corrupt; also clean under ASan+UBSan |
+| Wire format incl. v1 compatibility and type ids, type id check, RpcChannel (33 tests: lost request/ack, duplicates, late peer, nested request while caller waits, full dispatch queue, peer restart, stop from the dispatcher and restart, 8 concurrent senders) | `test/standalone` CMake harness, `-Werror -Wconversion -Wsign-conversion -Wshadow` | pass; ThreadSanitizer 20× repeat clean; ASan+UBSan clean |
+| ZenohPicoBus, CycloneDdsBus against the real libraries, two processes, both start orders: ProvideService with type ids → nested RegisterNotification → 2000 × 256 B samples → 1 MiB sample → 200 request round trips → StopOffer | `test/standalone/run_two_process.py` | pass on both; 0 lost, 0 reordered, 0 corrupt; also clean under ASan+UBSan |
 | `NetworkTransport`, config parser, `GatewayApplication` changes, `TransportFactory` with both flags, `network_transport_test.cpp`, new `gateway_application_test.cpp` cases | `g++ -fsyntax-only` against the real communication + baselibs headers, strict warnings | compile clean. **Not executed:** linking the mw::com runtime needs the Bazel build |
 
 Request round trip on localhost (2 vCPU container, 200 probes): p50 ≈ 45–70 µs, p99 ≈ 90–300 µs, max ≈ 2.4–3.6 ms.

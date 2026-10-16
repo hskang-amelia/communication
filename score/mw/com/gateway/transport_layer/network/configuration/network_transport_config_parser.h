@@ -14,6 +14,7 @@
 #define SCORE_MW_COM_GATEWAY_TRANSPORT_LAYER_NETWORK_CONFIGURATION_NETWORK_TRANSPORT_CONFIG_PARSER_H
 
 #include "score/mw/com/gateway/transport_layer/network/core/rpc_channel.h"
+#include "score/mw/com/gateway/transport_layer/network/core/type_id_check.h"
 #include "score/mw/com/gateway/transport_layer/network/dds/cyclone_dds_bus_config.h"
 #include "score/mw/com/gateway/transport_layer/network/zenoh/zenoh_pico_bus_config.h"
 
@@ -30,6 +31,8 @@ namespace score::mw::com::gateway::network
 struct NetworkTransportConfig
 {
     RpcChannelConfig rpc{};
+    /// \brief Optional "type-check" section: event type ids and the policy for missing ones.
+    TypeIdConfig type_check{};
     ZenohPicoBusConfig zenoh_pico{};
     CycloneDdsBusConfig cyclone_dds{};
 };

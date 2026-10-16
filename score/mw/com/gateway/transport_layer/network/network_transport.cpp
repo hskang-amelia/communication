@@ -127,8 +127,12 @@ void LogIfFailed(const score::Result<void>& result, std::string_view what)
 
 NetworkTransport::NetworkTransport(GatewayCore& gateway_core,
                                    std::unique_ptr<IMessageBus> bus,
-                                   RpcChannelConfig rpc_config)
-    : gateway_core_{gateway_core}, bus_{std::move(bus)}, channel_{*bus_, rpc_config, RpcChannel::GenerateSessionId()}
+                                   RpcChannelConfig rpc_config,
+                                   TypeIdConfig type_ids)
+    : gateway_core_{gateway_core},
+      type_ids_{std::move(type_ids)},
+      bus_{std::move(bus)},
+      channel_{*bus_, rpc_config, RpcChannel::GenerateSessionId()}
 {
 }
 
@@ -168,9 +172,12 @@ score::Result<void> NetworkTransport::ProvideService(score::mw::com::InstanceSpe
     request.events.reserve(service_elements.size());
     for (const auto& element : service_elements)
     {
-        request.events.push_back(EventMeta{std::string{element.name},
+        std::string name{element.name};
+        std::string type_id{type_ids_.Find(request.instance, name)};
+        request.events.push_back(EventMeta{std::move(name),
                                            static_cast<std::uint64_t>(element.data_type_meta_info.size),
-                                           static_cast<std::uint64_t>(element.data_type_meta_info.alignment)});
+                                           static_cast<std::uint64_t>(element.data_type_meta_info.alignment),
+                                           std::move(type_id)});
     }
     return ToResult(channel_.SendRequest(request));
 }
@@ -241,10 +248,42 @@ RpcChannelStatistics NetworkTransport::Statistics() const
     return channel_.Statistics();
 }
 
+std::uint64_t NetworkTransport::TypeIdRejections() const noexcept
+{
+    return type_id_rejections_.load();
+}
+
+bool NetworkTransport::CheckTypeIds(const network::ProvideService& request)
+{
+    bool accepted{true};
+    for (const auto& event : request.events)
+    {
+        const auto& local = type_ids_.Find(request.instance, event.name);
+        const auto verdict = CompareTypeId(local, event.type_id);
+        if (verdict == TypeIdVerdict::kMatch)
+        {
+            continue;
+        }
+        const bool event_accepted = IsAccepted(verdict, type_ids_.policy);
+        auto stream = event_accepted ? score::mw::log::LogWarn(kLogContext) : score::mw::log::LogError(kLogContext);
+        stream << "NetworkTransport: ProvideService" << std::string_view{request.instance} << "event"
+               << std::string_view{event.name} << ":" << std::string_view{ToString(verdict)} << "(local"
+               << std::string_view{local} << ", peer" << std::string_view{event.type_id} << ")"
+               << (event_accepted ? std::string_view{"- accepted"} : std::string_view{"- service not provided"});
+        accepted = accepted && event_accepted;
+    }
+    return accepted;
+}
+
 void NetworkTransport::Dispatch(const Frame& frame)
 {
     if (const auto* provide = std::get_if<network::ProvideService>(&frame.body))
     {
+        if (!CheckTypeIds(*provide))
+        {
+            type_id_rejections_.fetch_add(1U);
+            return;
+        }
         WithInstance(provide->instance, "ProvideService", [this, provide](score::mw::com::InstanceSpecifier spec) {
             // EventInfo::name is a string_view into the frame, which outlives this call.
             std::vector<score::mw::com::EventInfo> elements{};

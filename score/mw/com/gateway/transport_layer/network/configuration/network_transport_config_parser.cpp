@@ -33,6 +33,10 @@ constexpr auto kMaxAttemptsKey = "max-attempts"sv;
 constexpr auto kDedupeWindowKey = "dedupe-window"sv;
 constexpr auto kMaxDispatchQueueKey = "max-dispatch-queue"sv;
 
+constexpr auto kTypeCheckKey = "type-check"sv;
+constexpr auto kPolicyKey = "policy"sv;
+constexpr auto kTypeIdsKey = "type-ids"sv;
+
 constexpr auto kZenohPicoKey = "zenoh-pico"sv;
 constexpr auto kModeKey = "mode"sv;
 constexpr auto kConnectKey = "connect"sv;
@@ -117,6 +121,38 @@ void ParseRpc(const score::json::Object& top, RpcChannelConfig& rpc)
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_attempts > 0U, "rpc.max-attempts must be > 0");
 }
 
+void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
+{
+    if (top.find(kTypeCheckKey) == top.cend())
+    {
+        return;
+    }
+    const auto& object = ObjectAt(top, kTypeCheckKey);
+    std::string policy{"warn"};
+    OptionalString(object, kPolicyKey, policy);
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE((policy == "warn") || (policy == "strict"),
+                                                "type-check.policy must be \"warn\" or \"strict\"");
+    config.policy = (policy == "strict") ? TypeIdPolicy::kStrict : TypeIdPolicy::kWarn;
+    if (object.find(kTypeIdsKey) == object.cend())
+    {
+        return;
+    }
+    for (const auto& [instance_key, instance_value] : ObjectAt(object, kTypeIdsKey))
+    {
+        const auto events = instance_value.As<score::json::Object>();
+        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(events.has_value(),
+                                                    "type-check.type-ids entries must map event names to type ids");
+        auto& target = config.type_ids[std::string{instance_key.GetAsStringView()}];
+        for (const auto& [event_key, event_value] : events.value().get())
+        {
+            const auto type_id = event_value.As<std::string>();
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(type_id.has_value() && !type_id.value().get().empty(),
+                                                        "type-check.type-ids values must be non-empty strings");
+            target[std::string{event_key.GetAsStringView()}] = type_id.value().get();
+        }
+    }
+}
+
 void ParseZenohPico(const score::json::Object& top, ZenohPicoBusConfig& config)
 {
     const auto& object = ObjectAt(top, kZenohPicoKey);
@@ -177,6 +213,7 @@ NetworkTransportConfig ParseNetworkTransportConfig(score::json::Any json, Networ
 
     NetworkTransportConfig config{};
     ParseRpc(top, config.rpc);
+    ParseTypeCheck(top, config.type_check);
     if (backend == NetworkBackend::kZenohPico)
     {
         ParseZenohPico(top, config.zenoh_pico);

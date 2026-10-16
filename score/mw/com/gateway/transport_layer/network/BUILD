@@ -48,11 +48,13 @@ cc_library(
     name = "network_core",
     srcs = [
         "core/rpc_channel.cpp",
+        "core/type_id_check.cpp",
         "core/wire_format.cpp",
     ],
     hdrs = [
         "core/message_bus.h",
         "core/rpc_channel.h",
+        "core/type_id_check.h",
         "core/wire_format.h",
     ],
     features = COMPILER_WARNING_FEATURES,
@@ -71,6 +73,7 @@ cc_unit_test(
     name = "network_core_test",
     srcs = [
         "core/rpc_channel_test.cpp",
+        "core/type_id_check_test.cpp",
         "core/wire_format_test.cpp",
     ],
     features = COMPILER_WARNING_FEATURES,

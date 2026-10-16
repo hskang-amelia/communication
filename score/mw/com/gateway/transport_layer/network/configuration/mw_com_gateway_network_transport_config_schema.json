@@ -17,6 +17,23 @@
                 "max-dispatch-queue": {"type": "integer", "minimum": 1, "default": 1024, "description": "Inbound frames waiting for dispatch."}
             }
         },
+        "type-check": {
+            "title": "Event type identity check",
+            "description": "Samples are copied in their binary C++ layout and only their size is checked. Type ids let both gateways confirm they use the same type definition. A mismatch always rejects the service at the destination.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "policy": {"type": "string", "enum": ["warn", "strict"], "default": "warn", "description": "warn: a missing type id is logged and accepted. strict: every event needs the same type id on both sides."},
+                "type-ids": {
+                    "type": "object",
+                    "description": "Instance specifier -> event name -> opaque type id (e.g. \"DriveMode@1.2\" or a hash of the generated type definition).",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 65535}
+                    }
+                }
+            }
+        },
         "zenoh-pico": {
             "title": "zenoh-pico backend (transport id zenoh_pico)",
             "type": "object",

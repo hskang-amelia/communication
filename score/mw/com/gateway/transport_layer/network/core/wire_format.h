@@ -33,7 +33,9 @@ namespace score::mw::com::gateway::network
 {
 
 constexpr std::uint16_t kWireMagic{0x4753U};  // "SG" when read little endian
-constexpr std::uint8_t kWireVersion{1U};
+/// Version 2 adds EventMeta::type_id to ProvideService. Version 1 frames are still decoded (type_id empty).
+constexpr std::uint8_t kWireVersion{2U};
+constexpr std::uint8_t kMinWireVersion{1U};
 constexpr std::size_t kHeaderSize{16U};
 constexpr std::size_t kMaxStringLength{0xFFFFU};
 constexpr std::size_t kMaxEventsPerService{0xFFFFU};
@@ -63,6 +65,8 @@ struct EventMeta
     std::string name;
     std::uint64_t size{0U};
     std::uint64_t alignment{0U};
+    /// \brief Opaque identity of the event data type (see TypeIdConfig). Empty: not configured. Since version 2.
+    std::string type_id{};
 };
 
 struct ProvideService

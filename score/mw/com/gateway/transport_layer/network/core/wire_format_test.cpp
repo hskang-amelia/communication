@@ -68,6 +68,67 @@ TEST(WireFormatTest, ProvideServiceRoundTrip)
     EXPECT_EQ(out.events[1].alignment, 1U);
 }
 
+TEST(WireFormatTest, ProvideServiceCarriesTypeIds)
+{
+    ProvideService in{"/vehicle/drive", {{"mode", 4U, 4U, "DriveMode@1.2"}, {"raw", 16U, 8U, ""}}};
+    const auto frame = DecodeOrFail(EncodeOrFail(in));
+    const auto& out = std::get<ProvideService>(frame.body);
+    ASSERT_EQ(out.events.size(), 2U);
+    EXPECT_EQ(out.events[0].type_id, "DriveMode@1.2");
+    EXPECT_EQ(out.events[1].type_id, "");
+    EXPECT_EQ(out.events[1].size, 16U);
+}
+
+void PutU16(std::vector<std::uint8_t>& out, std::uint16_t value)
+{
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+}
+
+void PutU64(std::vector<std::uint8_t>& out, std::uint64_t value)
+{
+    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U)
+    {
+        out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+void PutStr(std::vector<std::uint8_t>& out, const std::string& value)
+{
+    PutU16(out, static_cast<std::uint16_t>(value.size()));
+    out.insert(out.end(), value.begin(), value.end());
+}
+
+TEST(WireFormatTest, DecodesVersion1ProvideServiceWithoutTypeIds)
+{
+    // A version 1 peer: header + instance + count + (name, size, alignment) per event, no type id.
+    std::vector<std::uint8_t> bytes{0x53U, 0x47U, 1U, static_cast<std::uint8_t>(FrameKind::kProvideService)};
+    PutU64(bytes, 11U);
+    bytes.insert(bytes.end(), {5U, 0U, 0U, 0U});
+    PutStr(bytes, "/vehicle/speed");
+    PutU16(bytes, 1U);
+    PutStr(bytes, "speed");
+    PutU64(bytes, 8U);
+    PutU64(bytes, 8U);
+
+    const auto frame = DecodeOrFail(bytes);
+    EXPECT_EQ(frame.header.session, 11U);
+    EXPECT_EQ(frame.header.sequence, 5U);
+    const auto& out = std::get<ProvideService>(frame.body);
+    ASSERT_EQ(out.events.size(), 1U);
+    EXPECT_EQ(out.events[0].name, "speed");
+    EXPECT_EQ(out.events[0].size, 8U);
+    EXPECT_EQ(out.events[0].type_id, "");
+}
+
+TEST(WireFormatTest, Version1OfferServiceStillDecodes)
+{
+    auto bytes = EncodeOrFail(OfferService{"/vehicle/speed"});
+    bytes[2] = 1U;
+    const auto frame = DecodeOrFail(bytes);
+    EXPECT_EQ(std::get<OfferService>(frame.body).instance, "/vehicle/speed");
+}
+
 TEST(WireFormatTest, AllBodiesRoundTrip)
 {
     const std::vector<FrameBody> bodies{
@@ -151,6 +212,8 @@ TEST(WireFormatTest, RejectsMalformedFrames)
 
     auto bad_version = bytes;
     bad_version[2] = static_cast<std::uint8_t>(kWireVersion + 1U);
+    EXPECT_EQ(Decode(bad_version.data(), bad_version.size()).error, DecodeError::kUnsupportedVersion);
+    bad_version[2] = 0U;
     EXPECT_EQ(Decode(bad_version.data(), bad_version.size()).error, DecodeError::kUnsupportedVersion);
 
     auto bad_kind = bytes;

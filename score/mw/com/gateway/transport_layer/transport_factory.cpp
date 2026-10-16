@@ -54,7 +54,7 @@ std::unique_ptr<Transport> TransportFactory::Create(GatewayCore& gateway_core,
     {
         auto config = network::ParseNetworkTransportConfig(transport_config_path, network::NetworkBackend::kZenohPico);
         return std::make_unique<network::NetworkTransport>(
-            gateway_core, std::make_unique<network::ZenohPicoBus>(config.zenoh_pico), config.rpc);
+            gateway_core, std::make_unique<network::ZenohPicoBus>(config.zenoh_pico), config.rpc, config.type_check);
     }
 #endif
 #if defined(SCORE_GATEWAY_WITH_CYCLONE_DDS)
@@ -63,7 +63,7 @@ std::unique_ptr<Transport> TransportFactory::Create(GatewayCore& gateway_core,
         auto config =
             network::ParseNetworkTransportConfig(transport_config_path, network::NetworkBackend::kCycloneDds);
         return std::make_unique<network::NetworkTransport>(
-            gateway_core, std::make_unique<network::CycloneDdsBus>(config.cyclone_dds), config.rpc);
+            gateway_core, std::make_unique<network::CycloneDdsBus>(config.cyclone_dds), config.rpc, config.type_check);
     }
 #endif
 

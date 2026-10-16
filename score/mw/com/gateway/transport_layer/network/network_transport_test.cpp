@@ -70,6 +70,33 @@ class NetworkTransportTest : public ::testing::Test
         destination_.reset();
     }
 
+    /// Replaces both transports with ones that use the given type id configurations.
+    void Recreate(TypeIdConfig source_ids, TypeIdConfig destination_ids)
+    {
+        source_.reset();
+        destination_.reset();
+        auto buses = LoopbackBus::CreatePair();
+        source_ = std::make_unique<NetworkTransport>(
+            source_core_, std::move(buses.first), FastConfig(), std::move(source_ids));
+        destination_ = std::make_unique<NetworkTransport>(
+            destination_core_, std::move(buses.second), FastConfig(), std::move(destination_ids));
+        ASSERT_TRUE(source_->Setup().has_value());
+        ASSERT_TRUE(destination_->Setup().has_value());
+    }
+
+    /// Requests are dispatched in order: once this OfferService has reached the destination core, every request
+    /// sent before it has been dispatched too.
+    void SendOfferAndWait()
+    {
+        std::promise<void> offered{};
+        EXPECT_CALL(destination_core_, OfferService(_)).WillOnce(Invoke([&offered](auto) {
+            offered.set_value();
+            return score::Result<void>{};
+        }));
+        ASSERT_TRUE(source_->OfferService(Specifier()).has_value());
+        ASSERT_EQ(offered.get_future().wait_for(2s), std::future_status::ready);
+    }
+
     NiceMock<GatewayCoreMock> source_core_;
     NiceMock<GatewayCoreMock> destination_core_;
     std::unique_ptr<NetworkTransport> source_;
@@ -218,6 +245,75 @@ TEST_F(NetworkTransportTest, RequestsFailAfterShutdown)
 {
     source_->Shutdown();
     EXPECT_FALSE(source_->OfferService(Specifier()).has_value());
+}
+
+}  // namespace
+}  // namespace score::mw::com::gateway::network
+
+namespace score::mw::com::gateway::network
+{
+namespace
+{
+
+TypeIdConfig IdsFor(std::string type_id, TypeIdPolicy policy = TypeIdPolicy::kWarn)
+{
+    TypeIdConfig config{};
+    config.policy = policy;
+    if (!type_id.empty())
+    {
+        config.type_ids[kInstance]["speed"] = std::move(type_id);
+    }
+    return config;
+}
+
+std::vector<score::mw::com::EventInfo> SpeedEvent()
+{
+    return {score::mw::com::impl::EventInfo{"speed", score::mw::com::impl::DataTypeMetaInfo{8U, 8U}}};
+}
+
+TEST_F(NetworkTransportTest, MatchingTypeIdsProvideTheService)
+{
+    Recreate(IdsFor("Speed@1"), IdsFor("Speed@1"));
+    std::promise<void> called{};
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).WillOnce(Invoke([&called](auto, auto) {
+        called.set_value();
+        return score::Result<void>{};
+    }));
+    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
+    EXPECT_EQ(called.get_future().wait_for(2s), std::future_status::ready);
+    EXPECT_EQ(destination_->TypeIdRejections(), 0U);
+}
+
+TEST_F(NetworkTransportTest, MismatchedTypeIdRejectsTheService)
+{
+    Recreate(IdsFor("Speed@2"), IdsFor("Speed@1"));
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).Times(0);
+    // The request itself is delivered (and acked); the destination does not provide the service.
+    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
+    SendOfferAndWait();
+    EXPECT_EQ(destination_->TypeIdRejections(), 1U);
+}
+
+TEST_F(NetworkTransportTest, StrictPolicyRejectsAMissingTypeId)
+{
+    Recreate(IdsFor(""), IdsFor("Speed@1", TypeIdPolicy::kStrict));
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).Times(0);
+    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
+    SendOfferAndWait();
+    EXPECT_EQ(destination_->TypeIdRejections(), 1U);
+}
+
+TEST_F(NetworkTransportTest, WarnPolicyAcceptsAMissingTypeId)
+{
+    Recreate(IdsFor("Speed@1"), IdsFor(""));
+    std::promise<void> called{};
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).WillOnce(Invoke([&called](auto, auto) {
+        called.set_value();
+        return score::Result<void>{};
+    }));
+    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
+    EXPECT_EQ(called.get_future().wait_for(2s), std::future_status::ready);
+    EXPECT_EQ(destination_->TypeIdRejections(), 0U);
 }
 
 }  // namespace

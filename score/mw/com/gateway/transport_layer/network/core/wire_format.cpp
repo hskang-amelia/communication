@@ -206,6 +206,11 @@ struct BodyWriter
             }
             writer.U64(event.size);
             writer.U64(event.alignment);
+            if (!writer.Str(event.type_id))
+            {
+                error = EncodeError::kStringTooLong;
+                return false;
+            }
         }
         return true;
     }
@@ -288,7 +293,7 @@ DecodeError ReadInstanceBody(Reader& reader, FrameBody& body)
     return DecodeError::kNone;
 }
 
-DecodeError ReadBody(FrameKind kind, Reader& reader, FrameBody& body)
+DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, FrameBody& body)
 {
     switch (kind)
     {
@@ -305,6 +310,10 @@ DecodeError ReadBody(FrameKind kind, Reader& reader, FrameBody& body)
             {
                 EventMeta event{};
                 if (!reader.Str(event.name) || !reader.U64(event.size) || !reader.U64(event.alignment))
+                {
+                    return DecodeError::kTruncated;
+                }
+                if ((version >= 2U) && !reader.Str(event.type_id))
                 {
                     return DecodeError::kTruncated;
                 }
@@ -449,7 +458,7 @@ DecodeResult Decode(const std::uint8_t* data, std::size_t size)
         result.error = DecodeError::kBadMagic;
         return result;
     }
-    if (version != kWireVersion)
+    if ((version < kMinWireVersion) || (version > kWireVersion))
     {
         result.error = DecodeError::kUnsupportedVersion;
         return result;
@@ -461,7 +470,7 @@ DecodeResult Decode(const std::uint8_t* data, std::size_t size)
     }
     frame.header.kind = static_cast<FrameKind>(kind);
 
-    const auto body_error = ReadBody(frame.header.kind, reader, frame.body);
+    const auto body_error = ReadBody(frame.header.kind, version, reader, frame.body);
     if (body_error != DecodeError::kNone)
     {
         result.error = body_error;

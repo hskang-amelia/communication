@@ -84,6 +84,11 @@ ChannelStatus RpcChannel::Start(FrameDispatcher dispatcher)
     {
         return ChannelStatus::kOk;
     }
+    if (dispatch_thread_.joinable())
+    {
+        // Left over from a Stop() that was called on the dispatch thread itself; that thread has exited by now.
+        dispatch_thread_.join();
+    }
     dispatcher_ = std::move(dispatcher);
     {
         std::lock_guard<std::mutex> lock{queue_mutex_};
@@ -122,6 +127,8 @@ void RpcChannel::Stop()
         stop_dispatch_ = true;
     }
     queue_cv_.notify_all();
+    // Called from inside the dispatcher (a handler shutting the transport down), the thread cannot join itself. It
+    // returns from DispatchLoop() right after the handler; Start() or the destructor takes care of it.
     if (dispatch_thread_.joinable() && (dispatch_thread_.get_id() != std::this_thread::get_id()))
     {
         dispatch_thread_.join();
@@ -172,16 +179,14 @@ ChannelStatus RpcChannel::SendRequest(const FrameBody& body)
             std::lock_guard<std::mutex> lock{stats_mutex_};
             ++stats_.retries;
         }
-        if (PublishBuffer(buffer) != ChannelStatus::kOk)
-        {
-            // A publish error can be transient (e.g. reconnecting session). Keep retrying until attempts run out.
-            result = ChannelStatus::kPublishFailed;
-        }
+        // A publish error can be transient (e.g. a reconnecting session): keep retrying until attempts run out and
+        // report what happened in the last attempt.
+        const bool published = (PublishBuffer(buffer) == ChannelStatus::kOk);
 
         std::unique_lock<std::mutex> lock{pending_mutex_};
-        const bool acked = pending_cv_.wait_for(lock, config_.ack_timeout, [this, sequence]() {
+        static_cast<void>(pending_cv_.wait_for(lock, config_.ack_timeout, [this, sequence]() {
             return (acked_.count(sequence) != 0U) || !running_.load();
-        });
+        }));
         if (acked_.count(sequence) != 0U)
         {
             result = ChannelStatus::kOk;
@@ -192,11 +197,7 @@ ChannelStatus RpcChannel::SendRequest(const FrameBody& body)
             result = ChannelStatus::kNotStarted;
             break;
         }
-        static_cast<void>(acked);
-        if (result != ChannelStatus::kPublishFailed)
-        {
-            result = ChannelStatus::kTimeout;
-        }
+        result = published ? ChannelStatus::kTimeout : ChannelStatus::kPublishFailed;
     }
 
     std::lock_guard<std::mutex> lock{pending_mutex_};
@@ -292,9 +293,7 @@ void RpcChannel::OnFrame(const std::uint8_t* data, std::size_t size)
             ++stats_.queue_overflows;
             return;
         }
-        queue_.push_back(std::move(frame));
     }
-    queue_cv_.notify_one();
 
     if (needs_ack)
     {
@@ -311,8 +310,17 @@ void RpcChannel::OnFrame(const std::uint8_t* data, std::size_t size)
             seen_.erase(seen_order_.front());
             seen_order_.pop_front();
         }
+        // Ack before the frame becomes visible to the dispatcher: a handler may stop the channel (and close the
+        // bus) right away, which would otherwise swallow this Ack.
         SendAckFor(header);
     }
+
+    {
+        // Only this receive path grows the queue, so the capacity check above still holds (dispatch only shrinks it).
+        std::lock_guard<std::mutex> lock{queue_mutex_};
+        queue_.push_back(std::move(frame));
+    }
+    queue_cv_.notify_one();
 }
 
 bool RpcChannel::IsDuplicate(std::uint64_t session, std::uint32_t sequence)

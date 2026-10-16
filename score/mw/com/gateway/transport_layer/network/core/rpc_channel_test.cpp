@@ -364,6 +364,40 @@ TEST_F(RpcChannelTest, GarbageIsCountedAndIgnored)
     ASSERT_TRUE(recorder_b_.WaitFor(1U));
 }
 
+TEST_F(RpcChannelTest, PublishFailureFollowedByTimeoutReportsTimeout)
+{
+    // First send fails on the bus (endpoint closed), later sends succeed but the peer never acks.
+    std::atomic<int> sends{0};
+    bus_a_->SetFaultHook([&sends](const std::uint8_t*, std::size_t) {
+        sends.fetch_add(1);
+        return LoopbackBus::Fault::kDrop;
+    });
+    ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
+    EXPECT_EQ(a_->SendRequest(OfferService{"svc"}), ChannelStatus::kTimeout);
+    EXPECT_EQ(sends.load(), 5);
+}
+
+TEST_F(RpcChannelTest, StopFromDispatcherThenRestartWorks)
+{
+    std::promise<void> stopped{};
+    ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start([this, &stopped](const Frame&) {
+        b_->Stop();  // Stop from inside the dispatcher must not deadlock or terminate.
+        stopped.set_value();
+    }),
+              ChannelStatus::kOk);
+    EXPECT_EQ(a_->SendRequest(OfferService{"svc"}), ChannelStatus::kOk);
+    ASSERT_EQ(stopped.get_future().wait_for(2s), std::future_status::ready);
+
+    // The channel can be started again afterwards.
+    ASSERT_EQ(b_->Start([this](const Frame& f) {
+        recorder_b_(f);
+    }),
+              ChannelStatus::kOk);
+    EXPECT_EQ(a_->SendRequest(OfferService{"again"}), ChannelStatus::kOk);
+    EXPECT_TRUE(recorder_b_.WaitFor(1U));
+}
+
 TEST(RpcChannelSessionTest, GeneratedSessionIdsAreNonZeroAndDistinct)
 {
     const auto a = RpcChannel::GenerateSessionId();

@@ -1,0 +1,51 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Eclipse S-CORE - Communication: network (copying) gateway transport configuration schema",
+    "description": "mw::com gateway network transport configuration, used by transport ids zenoh_pico and cyclone_dds",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "rpc": {
+            "title": "Request delivery",
+            "description": "Ack, retry and dispatch settings shared by all network backends.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ack-timeout-ms": {"type": "integer", "minimum": 1, "default": 200, "description": "Wait for an ack before resending a request."},
+                "max-attempts": {"type": "integer", "minimum": 1, "default": 5, "description": "Sends of one request including the first."},
+                "dedupe-window": {"type": "integer", "minimum": 1, "default": 256, "description": "Recently dispatched request sequences remembered to drop resends."},
+                "max-dispatch-queue": {"type": "integer", "minimum": 1, "default": 1024, "description": "Inbound frames waiting for dispatch."}
+            }
+        },
+        "zenoh-pico": {
+            "title": "zenoh-pico backend (transport id zenoh_pico)",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["local-key", "remote-key"],
+            "properties": {
+                "mode": {"type": "string", "enum": ["peer", "client"], "default": "peer"},
+                "connect": {"type": "string", "description": "Endpoint to connect to, e.g. tcp/10.0.0.2:7447."},
+                "listen": {"type": "string", "description": "Endpoint to listen on, e.g. tcp/0.0.0.0:7447."},
+                "local-key": {"type": "string", "description": "Key expression of this gateway's inbox."},
+                "remote-key": {"type": "string", "description": "Key expression of the peer gateway's inbox."},
+                "open-timeout-ms": {"type": "integer", "minimum": 0, "default": 30000},
+                "max-frame-size": {"type": "integer", "minimum": 64, "default": 4096, "description": "Must not exceed Z_FRAG_MAX_SIZE of the zenoh-pico build."}
+            }
+        },
+        "cyclone-dds": {
+            "title": "Cyclone DDS backend (transport id cyclone_dds)",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["local-topic", "remote-topic"],
+            "properties": {
+                "domain-id": {"type": "integer", "minimum": 0, "maximum": 232, "default": 0},
+                "local-topic": {"type": "string", "description": "Topic this gateway reads (its inbox)."},
+                "remote-topic": {"type": "string", "description": "Topic of the peer gateway's inbox."},
+                "history-depth": {"type": "integer", "minimum": 1, "default": 256},
+                "max-blocking-time-ms": {"type": "integer", "minimum": 0, "default": 1000},
+                "config-xml": {"type": "string", "description": "Cyclone DDS XML configuration. Empty: CYCLONEDDS_URI or defaults."},
+                "wait-for-peer-ms": {"type": "integer", "minimum": 0, "default": 0}
+            }
+        }
+    }
+}

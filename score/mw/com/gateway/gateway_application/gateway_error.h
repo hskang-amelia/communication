@@ -32,6 +32,7 @@ enum class GatewayErrorc : score::result::ErrorCode
     kNonWhitelistedService,
     kNotificationFailed,
     kNotSupported,
+    kSampleDeliveryFailed,
 };
 
 score::result::Error MakeError(const GatewayErrorc code, const std::string_view message = "");
@@ -62,6 +63,8 @@ class GatewayErrorDomain final : public score::result::ErrorDomain
                 return "Gateway couldn't notify for this event.";
             case static_cast<score::result::ErrorCode>(GatewayErrorc::kNotSupported):
                 return "Operation not supported by this gateway core.";
+            case static_cast<score::result::ErrorCode>(GatewayErrorc::kSampleDeliveryFailed):
+                return "Gateway couldn't write a forwarded sample into its forwarding skeleton.";
             default:
                 return "unknown gateway error";
         }

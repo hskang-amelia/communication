@@ -94,6 +94,8 @@ class RpcChannel
     ChannelStatus Start(FrameDispatcher dispatcher);
 
     /// \brief Wakes up blocked senders (they return kNotStarted), closes the bus and joins the dispatch thread.
+    /// \details May be called from the dispatcher; the dispatch thread is then joined by the next Start() or by the
+    /// destructor. Precondition: the channel is not destroyed from within its own dispatcher.
     void Stop();
 
     /// \brief Sends a request and blocks until it is acked or all attempts timed out.

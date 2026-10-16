@@ -65,9 +65,11 @@ class Writer
     void PutLittleEndian(T value)
     {
         static_assert(std::is_unsigned<T>::value, "unsigned integers only");
+        // Widen first: shifting a promoted u8/u16 would mix int and unsigned operands.
+        const auto wide = static_cast<std::uint64_t>(value);
         for (std::size_t i = 0U; i < sizeof(T); ++i)
         {
-            out_.push_back(static_cast<std::uint8_t>((value >> (8U * i)) & 0xFFU));
+            out_.push_back(static_cast<std::uint8_t>((wide >> (8U * i)) & 0xFFU));
         }
     }
 

@@ -71,13 +71,13 @@ target_link_libraries(network_core_test PRIVATE network_core GTest::gtest_main)
 add_test(NAME network_core_test COMMAND network_core_test)
 
 # --- zenoh-pico backend ---------------------------------------------------------------------------------------
-find_library(ZENOHPICO_LIB zenohpico)
-find_path(ZENOHPICO_INCLUDE zenoh-pico.h)
-if(ZENOHPICO_LIB AND ZENOHPICO_INCLUDE AND EXISTS "${NET_DIR}/zenoh/zenoh_pico_bus.cpp")
+# The exported target carries the platform defines (ZENOH_LINUX, ...) the headers need.
+find_package(zenohpico CONFIG QUIET)
+if(zenohpico_FOUND AND EXISTS "${NET_DIR}/zenoh/zenoh_pico_bus.cpp")
   add_library(zenoh_pico_bus STATIC "${NET_DIR}/zenoh/zenoh_pico_bus.cpp")
-  target_include_directories(zenoh_pico_bus PUBLIC "${REPO_ROOT}" SYSTEM PUBLIC "${ZENOHPICO_INCLUDE}")
+  target_include_directories(zenoh_pico_bus PUBLIC "${REPO_ROOT}")
   target_compile_options(zenoh_pico_bus PRIVATE ${STRICT_WARNINGS})
-  target_link_libraries(zenoh_pico_bus PUBLIC network_core "${ZENOHPICO_LIB}")
+  target_link_libraries(zenoh_pico_bus PUBLIC network_core zenohpico::zenohpico_shared)
   set(HAVE_ZENOH_PICO ON)
 else()
   message(WARNING "zenoh-pico not found: ZenohPicoBus is not built")

@@ -101,3 +101,16 @@ cc_library(
         "@score_baselibs//score/result",
     ],
 )
+
+cc_unit_test(
+    name = "network_transport_test",
+    srcs = ["network_transport_test.cpp"],
+    features = COMPILER_WARNING_FEATURES,
+    deps = [
+        ":loopback_bus",
+        ":network_core",
+        ":network_transport",
+        "//score/mw/com/gateway/gateway_application:gateway_core_mock",
+        "//score/mw/com/gateway/gateway_application:gateway_error",
+    ],
+)

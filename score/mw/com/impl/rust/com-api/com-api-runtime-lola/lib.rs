@@ -26,11 +26,9 @@
 //! that utilize the COM API abstractions.
 
 mod consumer;
-// Note: The `method` module is currently a placeholder and
-// will be implemented in the future for the Lola runtime.
-// https://github.com/eclipse-score/communication/issues/782
 mod field_consumer;
 mod field_producer;
+// Synchronous method calls and field get/set (https://github.com/eclipse-score/communication/issues/782).
 mod method;
 mod producer;
 mod runtime;

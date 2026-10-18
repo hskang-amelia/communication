@@ -20,15 +20,19 @@
 //! queue position 0.
 //!
 //! Field get/set use the typed field FFI instead (see `LolaFieldAccess`).
+//!
+//! The C++ proxy method/field is not thread-safe (one call slot, unsynchronized state), so each caller
+//! serializes its calls with a mutex held over the whole buffer/DoCall/read-back sequence.
 use core::any::TypeId;
-use core::cell::Cell;
 use core::fmt::Debug;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
-use bridge_ffi_rs::{FFIBridge, FatPtr, ProxyMethodBinding, SkeletonMethodBinding};
+use bridge_ffi_rs::{FFIBridge, FatPtr, ProxyMethodBinding, SkeletonMethodBinding, FIELD_TYPE_MISMATCH};
 use score_com_concept::{
     CommData, Error, MethodArgs, MethodArgsAllocate, MethodArgsPtrTuple, MethodCaller, MethodFailedReason,
     MethodHandler, MethodHandlerCall, MethodInArgAllocator, MethodInArgMaybeUninit, MethodInArgPtr, MethodReturnSample,
@@ -41,7 +45,6 @@ use crate::producer::LolaProviderInfo;
 use crate::LolaRuntimeImpl;
 
 /// Return value of a method call on the consumer side, copied out of the C++ return-value buffer.
-/// "Zero-copy" in this module only refers to the argument side (`invoke_zero_copy`).
 pub struct LolaMethodReturnSample<T> {
     value: T,
 }
@@ -60,13 +63,19 @@ impl<T> MethodReturnSample<T> for LolaMethodReturnSample<T> {}
 // tuple's own layout is not guaranteed to match it.
 
 /// Boxed skeleton-method handler in the flattened FFI shape: quality type, then optional `(ptr, len)`
-/// in-args and return-value buffers (see `mw_com_impl_call_method_handler`, bridge_ffi_lola.rs).
-type BoxedMethodHandlerFn = Box<dyn FnMut(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send + 'static>;
+/// in-args and return-value buffers (see `mw_com_impl_call_method_handler`, bridge_ffi_lola.rs). `Fn + Sync`
+/// because C++ may call it from several threads at once.
+type BoxedMethodHandlerFn = Box<dyn Fn(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send + Sync + 'static>;
 
 /// Whether `Return` is `()` (a void method). `Return` is generic in the concept traits, so this is a
 /// `TypeId` check (`CommData: Reloc: 'static`).
 fn is_void<Return: 'static>() -> bool {
     TypeId::of::<Return>() == TypeId::of::<()>()
+}
+
+/// Takes a caller's call lock. A poisoned lock is still usable: it guards no data, only the C++ call.
+fn lock_calls(lock: &Mutex<()>) -> MutexGuard<'_, ()> {
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Owns its own `ProxyBase` (as each event subscriber in consumer.rs does) and the resolved
@@ -76,6 +85,8 @@ pub struct LolaMethodCaller<Args: MethodArgs, Return: CommData, B: FFIBridge> {
     binding: NonNull<ProxyMethodBinding>,
     _proxy: NativeProxyBase<B>,
     bridge: B,
+    /// Held for each complete call on `binding`.
+    call_lock: Mutex<()>,
     _phantom: PhantomData<(Args, Return)>,
 }
 
@@ -84,17 +95,23 @@ unsafe impl<Args: MethodArgs, Return: CommData, B: FFIBridge> Send for LolaMetho
 
 impl<Args: MethodArgs, Return: CommData, B: FFIBridge> LolaMethodCaller<Args, Return, B> {
     /// Calls the method (queue position 0) once the in-args buffer is filled, and reads the return value.
-    fn do_call_and_read_return(&self) -> Result<Return> {
+    /// `_calls` is the `call_lock` guard, held since the in-args buffer was requested.
+    fn do_call_and_read_return(&self, _calls: &MutexGuard<'_, ()>) -> Result<Return> {
         let return_ptr = if is_void::<Return>() {
             None
         } else {
             // SAFETY: self.binding is valid while _proxy is alive. Requested before DoCall, as
             // ProxyMethod<Signature>::operator() does.
-            let (ptr, _len) = unsafe {
+            let (ptr, len) = unsafe {
                 self.bridge
                     .proxy_method_get_return_value_buffer(self.binding.as_ptr(), 0)
             }
             .ok_or(Error::MethodError(MethodFailedReason::ReturnValueBufferUnavailable))?;
+            // The buffer is sized for the C++ return type; a different size means the types disagree.
+            if len != core::mem::size_of::<Return>() {
+                log::error!("LolaMethodCaller: return-value buffer size does not match the Rust return type");
+                return Err(Error::MethodError(MethodFailedReason::ReturnValueBufferUnavailable));
+            }
             Some(ptr)
         };
 
@@ -105,7 +122,8 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> LolaMethodCaller<Args, Re
         }
 
         let value = if let Some(ptr) = return_ptr {
-            // SAFETY: a successful DoCall leaves a live Return in this buffer, sized and aligned for it.
+            // SAFETY: a successful DoCall leaves a live Return in this buffer, which is size_of::<Return>()
+            // bytes (checked above) and aligned by the C++ binding.
             unsafe { (ptr as *const Return).read() }
         } else {
             // is_void::<Return>() proved Return == (), so this is a same-type, zero-sized copy.
@@ -142,6 +160,7 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
             binding,
             bridge: instance_info.bridge().clone(),
             _proxy: proxy,
+            call_lock: Mutex::new(()),
             _phantom: PhantomData,
         })
     }
@@ -149,6 +168,8 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
     #[allow(clippy::manual_async_fn)]
     fn invoke_with_copy<'a>(&'a self, args: Args) -> impl Future<Output = Result<LolaMethodReturnSample<Return>>> + 'a {
         async move {
+            // The body has no await point, so the guard is never held across one.
+            let calls = lock_calls(&self.call_lock);
             let (size, _align) = Args::layout();
             if size > 0 {
                 // SAFETY: self.binding is valid; only called for methods with in-arguments, as
@@ -156,15 +177,16 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
                 let (buf_ptr, buf_len) =
                     unsafe { self.bridge.proxy_method_get_in_args_buffer(self.binding.as_ptr(), 0) }
                         .ok_or(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable))?;
-                // A smaller buffer means the C++ and Rust argument layouts disagree; writing would
-                // overflow it.
-                if buf_len < size {
+                // The buffer is sized for the C++ argument types; a different size means the C++ and Rust
+                // argument layouts disagree.
+                if buf_len != size {
+                    log::error!("LolaMethodCaller: in-args buffer size does not match the Rust argument types");
                     return Err(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable));
                 }
-                // SAFETY: buf_ptr is valid for buf_len >= size bytes and aligned by the C++ binding.
+                // SAFETY: buf_ptr is valid for buf_len == size bytes and aligned by the C++ binding.
                 unsafe { args.write_into(buf_ptr) };
             }
-            let value = self.do_call_and_read_return()?;
+            let value = self.do_call_and_read_return(&calls)?;
             Ok(LolaMethodReturnSample { value })
         }
     }
@@ -173,18 +195,8 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
     where
         Args: MethodArgsAllocate<LolaMethodInArgAllocator>,
     {
-        let (size, _align) = Args::layout();
-        let buffer = if size > 0 {
-            // SAFETY: as in invoke_with_copy.
-            let (ptr, _len) = unsafe { self.bridge.proxy_method_get_in_args_buffer(self.binding.as_ptr(), 0) }
-                .ok_or(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable))?;
-            ptr
-        } else {
-            // Args == (): alloc_uninit never calls allocate::<T>(), so the null buffer is never used.
-            core::ptr::null_mut()
-        };
-        let allocator = LolaMethodInArgAllocator::new(buffer);
-        Ok(Args::alloc_uninit(&allocator))
+        // See LolaMethodInArgAllocator.
+        Err(Error::MethodError(MethodFailedReason::ZeroCopyNotSupported))
     }
 
     #[allow(clippy::manual_async_fn)]
@@ -195,67 +207,46 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
     where
         Args: MethodArgsPtrTuple<LolaRuntimeImpl<B>>,
     {
-        async move {
-            // The arguments were already written into the C++ in-args buffer through allocate().
-            let value = self.do_call_and_read_return()?;
-            Ok(LolaMethodReturnSample { value })
-        }
+        // Unreachable through the public API (allocate() fails first), but must not touch any buffer.
+        async move { Err(Error::MethodError(MethodFailedReason::ZeroCopyNotSupported)) }
     }
 }
 
-/// Initialized method argument inside the C++ in-args buffer. The pointer is not read back: the C++
-/// call already knows the buffer, the type exists for the `MethodInArgPtr<T>` contract.
-#[allow(dead_code)]
+/// Uninhabited: no value of the zero-copy types below can exist.
+enum Never {}
+
+/// Initialized zero-copy method argument. Cannot be constructed, see `LolaMethodInArgAllocator`.
 pub struct LolaMethodInArgPtr<T> {
-    ptr: *mut T,
+    _never: Never,
     _phantom: PhantomData<T>,
 }
 
 impl<T> MethodInArgPtr<T> for LolaMethodInArgPtr<T> {}
 
-/// Not yet initialized method argument slot inside the C++ in-args buffer.
+/// Not yet initialized zero-copy method argument. Cannot be constructed, see `LolaMethodInArgAllocator`.
 pub struct LolaMethodInArgMaybeUninit<T> {
-    ptr: *mut T,
+    never: Never,
     _phantom: PhantomData<T>,
 }
 
 impl<T> MethodInArgMaybeUninit<T> for LolaMethodInArgMaybeUninit<T> {
     type Ptr = LolaMethodInArgPtr<T>;
 
-    fn write(self, val: T) -> ZeroCopyArgs<LolaMethodInArgPtr<T>> {
-        // SAFETY: self.ptr is this argument's slot in the live in-args buffer (LolaMethodInArgAllocator).
-        unsafe {
-            self.ptr.write(val);
-        }
-        ZeroCopyArgs(LolaMethodInArgPtr {
-            ptr: self.ptr,
-            _phantom: PhantomData,
-        })
+    fn write(self, _val: T) -> ZeroCopyArgs<LolaMethodInArgPtr<T>> {
+        match self.never {}
     }
 
     unsafe fn assume_init(self) -> ZeroCopyArgs<LolaMethodInArgPtr<T>> {
-        ZeroCopyArgs(LolaMethodInArgPtr {
-            ptr: self.ptr,
-            _phantom: PhantomData,
-        })
+        match self.never {}
     }
 }
 
-/// Hands out argument slots at successive offsets of the in-args buffer, using the same layout as
-/// `MethodArgsCodec`. Correct because `alloc_uninit` calls `allocate::<T>()` once per field in order,
-/// and a fresh allocator is created per call.
+/// Zero-copy method arguments are not supported yet: a slot would point into the C++ in-args buffer
+/// without being tied to the caller's borrow, and that buffer is reused by the next call. Until the
+/// concept traits can express that lifetime, `allocate()` always fails and this type cannot be
+/// constructed; it exists for `Runtime::MethodInArgAllocator`.
 pub struct LolaMethodInArgAllocator {
-    buffer: *mut u8,
-    offset: Cell<usize>,
-}
-
-impl LolaMethodInArgAllocator {
-    fn new(buffer: *mut u8) -> Self {
-        Self {
-            buffer,
-            offset: Cell::new(0),
-        }
-    }
+    never: Never,
 }
 
 impl MethodInArgAllocator for LolaMethodInArgAllocator {
@@ -263,23 +254,18 @@ impl MethodInArgAllocator for LolaMethodInArgAllocator {
     type MethodInArgMaybeUninit<T: CommData> = LolaMethodInArgMaybeUninit<T>;
 
     fn allocate<T: CommData>(&self) -> LolaMethodInArgMaybeUninit<T> {
-        let current = self.offset.get();
-        let field_align = core::mem::align_of::<T>();
-        let padding = if current.is_multiple_of(field_align) {
-            0
-        } else {
-            field_align - (current % field_align)
-        };
-        let field_offset = current + padding;
-        self.offset.set(field_offset + core::mem::size_of::<T>());
-        // SAFETY: self.buffer is valid for Args::layout().0 bytes, and allocate() is called once per
-        // field in order, so the slot stays inside it.
-        let ptr = unsafe { self.buffer.add(field_offset) as *mut T };
-        LolaMethodInArgMaybeUninit {
-            ptr,
-            _phantom: PhantomData,
-        }
+        match self.never {}
     }
+}
+
+/// Logs and aborts when a handler buffer from C++ does not match `Args`/`Return`, mirroring the
+/// assertions of the typed C++ `SkeletonMethod` handler. Never unwinds into C++.
+fn abort_on_handler_buffer_mismatch(buffer: &str) -> ! {
+    log::error!(
+        "LolaMethodHandler: {} buffer missing or not sized for the Rust method signature; aborting",
+        buffer
+    );
+    std::process::abort();
 }
 
 /// Keeps the shared skeleton alive (via `LolaProviderInfo`) and holds the resolved
@@ -288,6 +274,8 @@ pub struct LolaMethodHandler<Args: MethodArgs, Return: CommData, B: FFIBridge> {
     binding: NonNull<SkeletonMethodBinding>,
     _provider: LolaProviderInfo<B>,
     bridge: B,
+    /// Set once a handler is handed to C++; later registrations are refused.
+    handler_registered: AtomicBool,
     _phantom: PhantomData<(Args, Return)>,
 }
 
@@ -295,6 +283,67 @@ pub struct LolaMethodHandler<Args: MethodArgs, Return: CommData, B: FFIBridge> {
 // `_provider`. Sync because the registered handler may run on another C++ thread.
 unsafe impl<Args: MethodArgs, Return: CommData, B: FFIBridge> Send for LolaMethodHandler<Args, Return, B> {}
 unsafe impl<Args: MethodArgs, Return: CommData, B: FFIBridge> Sync for LolaMethodHandler<Args, Return, B> {}
+
+impl<Args: MethodArgs, Return: CommData, B: FFIBridge> LolaMethodHandler<Args, Return, B> {
+    /// Registers `handler` unless one is already registered. `SkeletonMethod::RegisterHandler` replaces
+    /// the stored handler without synchronization, and the replaced Rust box could never be freed, so only
+    /// the first registration reaches C++. C++ keeps that handler across StopOfferService, so it is still
+    /// served after an unoffer/offer cycle.
+    fn try_register_handler<F>(&self, handler: F) -> Result<()>
+    where
+        F: MethodHandlerCall<Args, Return>,
+    {
+        if self.handler_registered.swap(true, Ordering::AcqRel) {
+            return Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered));
+        }
+
+        let (args_size, _align) = Args::layout();
+        let return_size = core::mem::size_of::<Return>();
+        let void_return = is_void::<Return>();
+        let boxed_handler: BoxedMethodHandlerFn = Box::new(move |_quality_type, in_args, return_buf| {
+            let in_args_ptr = match in_args {
+                Some((ptr, len)) if len == args_size => ptr as *const u8,
+                None if args_size == 0 => core::ptr::null(),
+                _ => abort_on_handler_buffer_mismatch("in-args"),
+            };
+            let return_ptr = match return_buf {
+                Some((ptr, len)) if len == return_size => Some(ptr),
+                None if void_return => None,
+                _ => abort_on_handler_buffer_mismatch("return-value"),
+            };
+            // SAFETY: in_args_ptr is either valid for args_size bytes holding an Args value in the
+            // MethodArgsCodec layout, or null with args_size == 0, which read_from never dereferences.
+            let args = unsafe { Args::read_from(in_args_ptr) };
+            let result: Return = handler.call(&args);
+            if let Some(ptr) = return_ptr {
+                // SAFETY: ptr is the live return-value buffer for this call, size_of::<Return>() bytes
+                // (checked above) and aligned by the C++ binding.
+                unsafe {
+                    (ptr as *mut Return).write(result);
+                }
+            }
+        });
+
+        let raw = Box::into_raw(boxed_handler);
+        // SAFETY: FatPtr is a binary-compatible reinterpretation of a `dyn Trait` fat pointer, as in the
+        // event receive-handler path (consumer.rs).
+        let fat_ptr: FatPtr = unsafe { core::mem::transmute(raw) };
+        // SAFETY: self.binding is valid while self._provider is alive; fat_ptr references the closure
+        // above. On success C++ keeps it for the process lifetime (SkeletonMethodBinding has no
+        // unregister hook).
+        let registered = unsafe {
+            self.bridge
+                .skeleton_method_register_handler(self.binding.as_ptr(), &fat_ptr)
+        };
+        if !registered {
+            // C++ never took ownership, so free the closure here and allow another attempt.
+            drop(unsafe { Box::from_raw(raw) });
+            self.handler_registered.store(false, Ordering::Release);
+            return Err(Error::MethodError(MethodFailedReason::HandlerRegistrationFailed));
+        }
+        Ok(())
+    }
+}
 
 impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Return, LolaRuntimeImpl<B>>
     for LolaMethodHandler<Args, Return, B>
@@ -318,6 +367,7 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Retur
             binding,
             bridge: instance_info.bridge().clone(),
             _provider: instance_info,
+            handler_registered: AtomicBool::new(false),
             _phantom: PhantomData,
         })
     }
@@ -326,42 +376,26 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Retur
     where
         F: MethodHandlerCall<Args, Return>,
     {
-        let boxed_handler: BoxedMethodHandlerFn = Box::new(move |_quality_type, in_args, return_buf| {
-            // SAFETY: in_args, when Some, holds an Args value in the MethodArgsCodec layout. When None
-            // (Args == ()), read_from never dereferences its argument.
-            let args = match in_args {
-                Some((ptr, _len)) => unsafe { Args::read_from(ptr as *const u8) },
-                None => unsafe { Args::read_from(core::ptr::null()) },
-            };
-            let result: Return = handler.call(&args);
-            if let Some((ptr, _len)) = return_buf {
-                // SAFETY: ptr is the live return-value buffer for this call, sized and aligned for
-                // Return by the C++ binding.
-                unsafe {
-                    (ptr as *mut Return).write(result);
-                }
-            }
-        });
-
-        let raw = Box::into_raw(boxed_handler);
-        // SAFETY: FatPtr is a binary-compatible reinterpretation of a `dyn Trait` fat pointer, as in the
-        // event receive-handler path (consumer.rs).
-        let fat_ptr: FatPtr = unsafe { core::mem::transmute(raw) };
-        // SAFETY: self.binding is valid while self._provider is alive; fat_ptr references the closure
-        // above. On success C++ keeps it for the process lifetime (SkeletonMethodBinding has no
-        // unregister hook).
-        let registered = unsafe {
-            self.bridge
-                .skeleton_method_register_handler(self.binding.as_ptr(), &fat_ptr)
-        };
-        if !registered {
-            // C++ never took ownership, so free the closure here.
-            drop(unsafe { Box::from_raw(raw) });
-            log::error!(
+        match self.try_register_handler(handler) {
+            Ok(()) => {},
+            Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered)) => log::warn!(
+                "LolaMethodHandler::register_handler: a handler is already registered for this method; \
+                 the new handler is ignored and the first one stays in use"
+            ),
+            Err(_) => log::error!(
                 "LolaMethodHandler::register_handler: mw_com_skeleton_method_register_handler failed; \
                  the handler was NOT registered with the underlying binding"
-            );
+            ),
         }
+    }
+}
+
+/// Maps a field FFI error code to an `Error`.
+fn field_access_error(code: i32) -> Error {
+    if code == FIELD_TYPE_MISMATCH {
+        Error::MethodError(MethodFailedReason::FieldTypeMismatch)
+    } else {
+        Error::MethodError(MethodFailedReason::FieldAccessFailed { code })
     }
 }
 
@@ -369,12 +403,15 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Retur
 ///
 /// The C++ field getter/setter return `score::Result<T>`, not `T`, so these do not use the method
 /// buffers: they call the typed `ProxyField<T>::Get()`/`Set()` through the field FFI registered by
-/// `EXPORT_MW_COM_FIELD` (registry_bridge_macro.h), which copies plain `T` values across.
+/// `EXPORT_MW_COM_FIELD` (registry_bridge_macro.h), which copies plain `T` values across once it has
+/// checked `T`'s size and alignment against the C++ field type.
 struct LolaFieldAccess<B: FFIBridge> {
     proxy: NativeProxyBase<B>,
     bridge: B,
     interface_id: &'static str,
     field_name: String,
+    /// Held for each Get/Set call on the C++ proxy field.
+    call_lock: Mutex<()>,
 }
 
 impl<B: FFIBridge> LolaFieldAccess<B> {
@@ -391,11 +428,13 @@ impl<B: FFIBridge> LolaFieldAccess<B> {
             bridge: instance_info.bridge().clone(),
             interface_id: instance_info.interface_id(),
             field_name,
+            call_lock: Mutex::new(()),
         })
     }
 
     fn get<T: CommData>(&self) -> Result<T> {
         let mut value = core::mem::MaybeUninit::<T>::uninit();
+        let _calls = lock_calls(&self.call_lock);
         // SAFETY: the proxy pointer is valid for the lifetime of self (owned by proxy); value is
         // valid, aligned storage for one T, initialized by C++ on success.
         unsafe {
@@ -404,15 +443,18 @@ impl<B: FFIBridge> LolaFieldAccess<B> {
                 self.interface_id,
                 &self.field_name,
                 value.as_mut_ptr() as *mut u8,
+                core::mem::size_of::<T>(),
+                core::mem::align_of::<T>(),
             )
         }
-        .map_err(|code| Error::MethodError(MethodFailedReason::FieldAccessFailed { code }))?;
+        .map_err(field_access_error)?;
         // SAFETY: proxy_field_get returned Ok, so C++ copy-constructed a T into value.
         Ok(unsafe { value.assume_init() })
     }
 
     fn set<T: CommData>(&self, new_value: &T) -> Result<T> {
         let mut accepted = core::mem::MaybeUninit::<T>::uninit();
+        let _calls = lock_calls(&self.call_lock);
         // SAFETY: as in get; new_value is a live T for the duration of the call.
         unsafe {
             self.bridge.proxy_field_set(
@@ -421,9 +463,11 @@ impl<B: FFIBridge> LolaFieldAccess<B> {
                 &self.field_name,
                 new_value as *const T as *const u8,
                 accepted.as_mut_ptr() as *mut u8,
+                core::mem::size_of::<T>(),
+                core::mem::align_of::<T>(),
             )
         }
-        .map_err(|code| Error::MethodError(MethodFailedReason::FieldAccessFailed { code }))?;
+        .map_err(field_access_error)?;
         // SAFETY: proxy_field_set returned Ok, so C++ copy-constructed the accepted T into accepted.
         Ok(unsafe { accepted.assume_init() })
     }
@@ -460,12 +504,8 @@ impl<T: CommData + Debug, B: FFIBridge> MethodCaller<(), T, LolaRuntimeImpl<B>> 
     where
         (): MethodArgsAllocate<LolaMethodInArgAllocator>,
     {
-        // A getter has no arguments: alloc_uninit for () never calls allocate::<T>(), so the null
-        // buffer is never dereferenced.
-        let allocator = LolaMethodInArgAllocator::new(core::ptr::null_mut());
-        Ok(<() as MethodArgsAllocate<LolaMethodInArgAllocator>>::alloc_uninit(
-            &allocator,
-        ))
+        // A getter has no arguments, so there is nothing to allocate.
+        Ok(())
     }
 
     #[allow(clippy::manual_async_fn)]
@@ -539,8 +579,10 @@ mod test {
     use std::task::{Context, Poll, Wake, Waker};
 
     use bridge_ffi_mock::{MockFFIBridge, MockPointerAllocator, SharedMockBridge};
-    use bridge_ffi_rs::{HandleType, ProxyBase};
+    use bridge_ffi_rs::{HandleType, ProxyBase, SkeletonBase};
     use score_com_concept::MethodArgsCodec;
+
+    use crate::producer::{NativeSkeletonHandle, SkeletonInstanceManager};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[repr(C)]
@@ -552,6 +594,19 @@ mod test {
 
     impl score_com_concept::CommData for MethodTestArg {
         const ID: &'static str = "MethodTestArg";
+    }
+
+    /// Same field name as `MethodTestArg` but a different size, to exercise the layout checks.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(C)]
+    struct MethodTestWideArg {
+        value: i64,
+    }
+
+    unsafe impl score_com_concept::Reloc for MethodTestWideArg {}
+
+    impl score_com_concept::CommData for MethodTestWideArg {
+        const ID: &'static str = "MethodTestWideArg";
     }
 
     struct NoopWake;
@@ -585,6 +640,7 @@ mod test {
         let prox = proxy_alloc.clone();
 
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
 
@@ -599,12 +655,15 @@ mod test {
         let return_len = return_buf.len();
 
         mock.expect_proxy_method_get_in_args_buffer()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| Some((in_args_addr as *mut u8, in_args_len)));
         mock.expect_proxy_method_get_return_value_buffer()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| Some((return_addr as *mut u8, return_len)));
         mock.expect_proxy_method_do_call()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 // SAFETY: plays the C++ side of this call for the test: in_args_addr/return_addr were
@@ -619,9 +678,12 @@ mod test {
             });
 
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         let bridge = SharedMockBridge::new(mock);
         let handle = HandleType::default();
@@ -633,6 +695,7 @@ mod test {
             binding,
             _proxy: proxy,
             bridge,
+            call_lock: Mutex::new(()),
             _phantom: PhantomData,
         };
 
@@ -661,17 +724,19 @@ mod test {
 
         mock.expect_proxy_field_get()
             .times(1)
-            .returning(|_proxy, interface_id, field_id, out_value| {
+            .returning(|_proxy, interface_id, field_id, out_value, size, align| {
                 assert_eq!(interface_id, "TestInterface");
                 assert_eq!(field_id, "speed");
+                assert_eq!((size, align), (4, 4));
                 // SAFETY: plays the C++ side: out_value is valid storage for one MethodTestArg.
                 unsafe { (out_value as *mut MethodTestArg).write(MethodTestArg { value: 30 }) };
                 Ok(())
             });
         let mut set_calls = 0;
         mock.expect_proxy_field_set().times(2).returning(
-            move |_proxy, _interface_id, field_id, in_value, out_value| {
+            move |_proxy, _interface_id, field_id, in_value, out_value, size, align| {
                 assert_eq!(field_id, "speed");
+                assert_eq!((size, align), (4, 4));
                 set_calls += 1;
                 if set_calls == 2 {
                     return Err(7);
@@ -700,6 +765,7 @@ mod test {
             bridge: bridge.clone(),
             interface_id: "TestInterface",
             field_name: "speed".to_owned(),
+            call_lock: Mutex::new(()),
         };
 
         let getter = LolaFieldGetCaller::<MethodTestArg, SharedMockBridge> {
@@ -730,5 +796,269 @@ mod test {
         drop(getter);
         drop(setter);
         proxy_alloc.assert_all_freed();
+    }
+
+    fn make_caller<Args: MethodArgs, Return: CommData>(
+        bridge: &SharedMockBridge,
+        binding_alloc: &MockPointerAllocator<ProxyMethodBinding>,
+    ) -> LolaMethodCaller<Args, Return, SharedMockBridge> {
+        let proxy = NativeProxyBase::<SharedMockBridge>::new(bridge, "TestInterface", &HandleType::default())
+            .expect("NativeProxyBase::new should succeed with mock create_proxy");
+        LolaMethodCaller {
+            binding: NonNull::new(binding_alloc.allocate()).expect("mock binding allocation should not fail"),
+            _proxy: proxy,
+            bridge: bridge.clone(),
+            call_lock: Mutex::new(()),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Zero-copy calls are refused without touching the C++ in-args buffer: the mock has no buffer or
+    /// call expectations, so any such FFI call would fail the test.
+    #[test]
+    fn test_method_zero_copy_is_not_supported() {
+        let mut mock = MockFFIBridge::new();
+        let proxy_alloc = MockPointerAllocator::<ProxyBase>::new();
+        let binding_alloc = MockPointerAllocator::<ProxyMethodBinding>::new();
+        let prox = proxy_alloc.clone();
+        mock.expect_create_proxy()
+            .times(2)
+            .returning(move |_, _| prox.allocate());
+        let prox_cleanup = proxy_alloc.clone();
+        mock.expect_destroy_proxy().times(2).returning(move |ptr| {
+            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+        });
+        let bridge = SharedMockBridge::new(mock);
+
+        let caller = make_caller::<(MethodTestArg,), MethodTestArg>(&bridge, &binding_alloc);
+        assert!(matches!(
+            caller.allocate(),
+            Err(Error::MethodError(MethodFailedReason::ZeroCopyNotSupported))
+        ));
+        let unit_caller = make_caller::<(), MethodTestArg>(&bridge, &binding_alloc);
+        assert!(matches!(
+            unit_caller.allocate(),
+            Err(Error::MethodError(MethodFailedReason::ZeroCopyNotSupported))
+        ));
+        assert!(matches!(
+            block_on_ready(unit_caller.invoke_zero_copy(())),
+            Err(Error::MethodError(MethodFailedReason::ZeroCopyNotSupported))
+        ));
+
+        drop(caller);
+        drop(unit_caller);
+        proxy_alloc.assert_all_freed();
+    }
+
+    /// In-args and return-value buffers whose size differs from the Rust `Args`/`Return` layout are
+    /// rejected before anything is written or read, and the call is not made (no `proxy_method_do_call`
+    /// expectation).
+    #[test]
+    fn test_method_call_rejects_buffer_size_mismatch() {
+        let mut mock = MockFFIBridge::new();
+        let proxy_alloc = MockPointerAllocator::<ProxyBase>::new();
+        let binding_alloc = MockPointerAllocator::<ProxyMethodBinding>::new();
+        let prox = proxy_alloc.clone();
+        mock.expect_create_proxy()
+            .times(1)
+            .returning(move |_, _| prox.allocate());
+
+        // C++ side: `MethodTestArg(MethodTestArg)`, i.e. 4-byte in-args and return buffers.
+        let mut in_args_buf = vec![0u8; 8];
+        let mut return_buf = vec![0u8; 4];
+        let in_args_addr = in_args_buf.as_mut_ptr() as usize;
+        let return_addr = return_buf.as_mut_ptr() as usize;
+        let mut in_args_calls = 0;
+        mock.expect_proxy_method_get_in_args_buffer()
+            .times(2)
+            .returning(move |_, _| {
+                in_args_calls += 1;
+                // First an 8-byte buffer for 4-byte Args, then a matching one.
+                let len = if in_args_calls == 1 { 8 } else { 4 };
+                Some((in_args_addr as *mut u8, len))
+            });
+        mock.expect_proxy_method_get_return_value_buffer()
+            .times(1)
+            .returning(move |_, _| Some((return_addr as *mut u8, 4)));
+
+        let prox_cleanup = proxy_alloc.clone();
+        mock.expect_destroy_proxy().times(1).returning(move |ptr| {
+            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+        });
+        let bridge = SharedMockBridge::new(mock);
+
+        // Rust side expects an 8-byte return value.
+        let caller = make_caller::<(MethodTestArg,), MethodTestWideArg>(&bridge, &binding_alloc);
+        assert!(matches!(
+            block_on_ready(caller.invoke_with_copy((MethodTestArg { value: 1 },))),
+            Err(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable))
+        ));
+        assert!(matches!(
+            block_on_ready(caller.invoke_with_copy((MethodTestArg { value: 1 },))),
+            Err(Error::MethodError(MethodFailedReason::ReturnValueBufferUnavailable))
+        ));
+        assert!(return_buf.iter().all(|&b| b == 0));
+
+        drop(caller);
+        proxy_alloc.assert_all_freed();
+    }
+
+    /// The field FFI receives the Rust value's size and alignment; when C++ reports a field type
+    /// mismatch, get and set fail with `FieldTypeMismatch` and nothing is read from the output storage.
+    #[test]
+    fn test_field_callers_report_type_mismatch() {
+        let mut mock = MockFFIBridge::new();
+        let proxy_alloc = MockPointerAllocator::<ProxyBase>::new();
+        let prox = proxy_alloc.clone();
+        mock.expect_create_proxy()
+            .times(2)
+            .returning(move |_, _| prox.allocate());
+
+        // Plays FieldMemberOperationImpl for a 4-byte, 4-aligned C++ field type.
+        let check_layout = |size: usize, align: usize| {
+            if (size, align) == (4, 4) {
+                Ok(())
+            } else {
+                Err(bridge_ffi_rs::FIELD_TYPE_MISMATCH)
+            }
+        };
+        mock.expect_proxy_field_get().times(1).returning(
+            move |_proxy, _interface_id, _field_id, _out_value, size, align| {
+                assert_eq!((size, align), (8, 8));
+                check_layout(size, align)
+            },
+        );
+        mock.expect_proxy_field_set().times(1).returning(
+            move |_proxy, _interface_id, _field_id, _in_value, _out_value, size, align| check_layout(size, align),
+        );
+
+        let prox_cleanup = proxy_alloc.clone();
+        mock.expect_destroy_proxy().times(2).returning(move |ptr| {
+            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+        });
+
+        let bridge = SharedMockBridge::new(mock);
+        let handle = HandleType::default();
+        let make_access = |bridge: &SharedMockBridge| LolaFieldAccess {
+            proxy: NativeProxyBase::<SharedMockBridge>::new(bridge, "TestInterface", &handle)
+                .expect("NativeProxyBase::new should succeed with mock create_proxy"),
+            bridge: bridge.clone(),
+            interface_id: "TestInterface",
+            field_name: "speed".to_owned(),
+            call_lock: Mutex::new(()),
+        };
+
+        let getter = LolaFieldGetCaller::<MethodTestWideArg, SharedMockBridge> {
+            access: make_access(&bridge),
+            _phantom: PhantomData,
+        };
+        assert!(matches!(
+            block_on_ready(getter.invoke_with_copy(())),
+            Err(Error::MethodError(MethodFailedReason::FieldTypeMismatch))
+        ));
+        let setter = LolaFieldSetCaller::<MethodTestWideArg, SharedMockBridge> {
+            access: make_access(&bridge),
+            _phantom: PhantomData,
+        };
+        assert!(matches!(
+            block_on_ready(setter.invoke_with_copy((MethodTestWideArg { value: 1 },))),
+            Err(Error::MethodError(MethodFailedReason::FieldTypeMismatch))
+        ));
+
+        drop(getter);
+        drop(setter);
+        proxy_alloc.assert_all_freed();
+    }
+
+    /// Only the first successful registration reaches C++: a failed attempt can be retried, a second
+    /// registration after a successful one is refused without an FFI call (the mock allows exactly two
+    /// calls), and the registered closure answers calls through shared references.
+    #[test]
+    fn test_method_handler_accepts_only_first_registration() {
+        let mut mock = MockFFIBridge::new();
+        let skeleton_alloc = MockPointerAllocator::<SkeletonBase>::new();
+        let skel = skeleton_alloc.clone();
+        mock.expect_create_skeleton()
+            .times(1)
+            .returning(move |_, _| skel.allocate());
+
+        let captured: Arc<Mutex<Option<FatPtr>>> = Arc::new(Mutex::new(None));
+        let cap = captured.clone();
+        let mut register_calls = 0;
+        mock.expect_skeleton_method_register_handler()
+            .times(2)
+            .returning(move |_binding, fat_ptr| {
+                register_calls += 1;
+                if register_calls == 1 {
+                    return false;
+                }
+                *cap.lock().expect("lock") = Some(*fat_ptr);
+                true
+            });
+
+        let skel_cleanup = skeleton_alloc.clone();
+        mock.expect_destroy_skeleton().times(1).returning(move |ptr| {
+            assert!(skel_cleanup.free(ptr), "destroy_skeleton called with unknown pointer");
+        });
+
+        let bridge = SharedMockBridge::new(mock);
+        let spec = bridge_ffi_rs::InstanceSpecifier::try_from("/test_instance").expect("valid instance specifier");
+        let skeleton_handle = NativeSkeletonHandle::<SharedMockBridge>::new(&bridge, "", &spec)
+            .expect("create_skeleton mock should not fail");
+        let provider = LolaProviderInfo::new_for_test(
+            score_com_concept::InstanceSpecifier::new("/test_instance").expect("valid instance specifier"),
+            "TestInterface",
+            SkeletonInstanceManager(Arc::new(skeleton_handle)),
+            bridge.clone(),
+        );
+        let binding_alloc = MockPointerAllocator::<SkeletonMethodBinding>::new();
+        let handler = LolaMethodHandler::<(MethodTestArg,), MethodTestArg, SharedMockBridge> {
+            binding: NonNull::new(binding_alloc.allocate()).expect("mock binding allocation should not fail"),
+            _provider: provider,
+            bridge: bridge.clone(),
+            handler_registered: AtomicBool::new(false),
+            _phantom: PhantomData,
+        };
+
+        let double = |arg: &MethodTestArg| MethodTestArg { value: arg.value * 2 };
+        assert!(matches!(
+            handler.try_register_handler(double),
+            Err(Error::MethodError(MethodFailedReason::HandlerRegistrationFailed))
+        ));
+        assert!(handler.try_register_handler(double).is_ok());
+        assert!(matches!(
+            handler.try_register_handler(|arg: &MethodTestArg| *arg),
+            Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered))
+        ));
+        // Through the trait: logged and ignored, no FFI call.
+        handler.register_handler(|arg: &MethodTestArg| *arg);
+
+        // Call the registered closure as mw_com_impl_call_method_handler (bridge_ffi_lola.rs) does.
+        type Callback = dyn Fn(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send + Sync;
+        let fat_ptr = captured
+            .lock()
+            .expect("lock")
+            .take()
+            .expect("a handler should be registered");
+        // SAFETY: fat_ptr was created from a BoxedMethodHandlerFn by try_register_handler above.
+        let callable: &Callback = unsafe { core::mem::transmute(fat_ptr) };
+        let mut in_args = vec![0u8; <(MethodTestArg,) as MethodArgsCodec>::layout().0];
+        // SAFETY: in_args holds exactly one (MethodTestArg,) in the MethodArgsCodec layout.
+        unsafe { (MethodTestArg { value: 21 },).write_into(in_args.as_mut_ptr()) };
+        let mut result = MethodTestArg { value: 0 };
+        callable(
+            0,
+            Some((in_args.as_mut_ptr(), in_args.len())),
+            Some((
+                &mut result as *mut MethodTestArg as *mut u8,
+                core::mem::size_of::<MethodTestArg>(),
+            )),
+        );
+        assert_eq!(result, MethodTestArg { value: 42 });
+        // SAFETY: no real C++ owner in this test, so the box is freed here.
+        drop(unsafe { Box::from_raw(callable as *const Callback as *mut Callback) });
+
+        drop(handler);
+        skeleton_alloc.assert_all_freed();
     }
 }

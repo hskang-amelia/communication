@@ -352,21 +352,24 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
     // --- Field get/set/update FFI. These go through the typed C++
     // ProxyField<T>/SkeletonField<T> API registered by `EXPORT_MW_COM_FIELD` (registry_bridge_macro.h),
     // not through the field's method bindings: a field getter/setter returns `score::Result<T>` on the
-    // wire, whose layout only C++ knows. Values cross the boundary as raw `T` memory. On failure the
-    // `Err` carries the C++ error code, or `-1` when the field is not exported, lacks the needed tag
-    // (WithGetter / WithSetter), or a pointer is invalid.
+    // wire, whose layout only C++ knows. Values cross the boundary as raw `T` memory; `size`/`align` are
+    // the Rust type's, and C++ rejects the call if they differ from the field type's. On failure the
+    // `Err` carries the C++ error code, `FIELD_OPERATION_UNAVAILABLE` when the field is not exported,
+    // lacks the needed tag (WithGetter / WithSetter), or a pointer is invalid, or `FIELD_TYPE_MISMATCH`.
 
     /// Call the field getter and write the received value into `out_value`.
     ///
     /// # Safety
     /// `proxy_ptr` must be a valid pointer from `create_proxy`. `out_value` must be valid for writes of
-    /// one value of the field's type, suitably aligned; on `Ok` it holds an initialized value.
+    /// `size` bytes, aligned to `align`; on `Ok` it holds an initialized value.
     unsafe fn proxy_field_get(
         &self,
         proxy_ptr: *mut ProxyBase,
         interface_id: &str,
         field_id: &str,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32>;
 
     /// Call the field setter with `*in_value` and write the value the provider accepted into
@@ -374,6 +377,7 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
     ///
     /// # Safety
     /// As for `proxy_field_get`; `in_value` must point to an initialized value of the field's type.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn proxy_field_set(
         &self,
         proxy_ptr: *mut ProxyBase,
@@ -381,6 +385,8 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
         field_id: &str,
         in_value: *const u8,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32>;
 
     /// Update the field value (`SkeletonField<T>::Update`). Before offering, this stores the initial
@@ -388,30 +394,43 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
     ///
     /// # Safety
     /// `skeleton_ptr` must be a valid pointer from `create_skeleton`; `value` must point to an
-    /// initialized value of the field's type.
+    /// initialized value of `size` bytes, aligned to `align`.
     unsafe fn skeleton_field_update(
         &self,
         skeleton_ptr: *mut SkeletonBase,
         interface_id: &str,
         field_id: &str,
         value: *const u8,
+        size: usize,
+        align: usize,
     ) -> bool;
 
     /// Install `handler` as the field's set handler (`SkeletonField<T>::RegisterSetHandler`). The
     /// closure is invoked through `mw_com_impl_call_field_set_handler` with a pointer to the requested
-    /// value, which it may replace in place with the value to accept.
+    /// value, which it may replace in place with the value to accept. `size`/`align` describe the
+    /// value type the handler expects.
     ///
     /// # Safety
     /// `skeleton_ptr` must be a valid pointer from `create_skeleton`. `handler` must reference a live
-    /// `Box<dyn FnMut(*mut u8) + Send>`; on `true` it is never freed (no unregister hook exists).
+    /// `Box<dyn Fn(*mut u8) + Send + Sync>`; on `true` it is never freed (no unregister hook exists).
     unsafe fn skeleton_field_register_set_handler(
         &self,
         skeleton_ptr: *mut SkeletonBase,
         interface_id: &str,
         field_id: &str,
         handler: &FatPtr,
+        size: usize,
+        align: usize,
     ) -> bool;
 }
+
+/// Field FFI error code: the field is not exported, lacks the needed tag, or a pointer is invalid
+/// (`kFieldOperationUnavailable`, registry_bridge_macro.h).
+pub const FIELD_OPERATION_UNAVAILABLE: i32 = -1;
+
+/// Field FFI error code: the value's size/alignment differs from the C++ field type's
+/// (`kFieldTypeMismatch`, registry_bridge_macro.h).
+pub const FIELD_TYPE_MISMATCH: i32 = -2;
 
 /// Fat pointer: binary representation of a Rust `dyn` trait object (vtable + data pointer).
 /// Passed across FFI boundaries to represent type-erased Rust closures.

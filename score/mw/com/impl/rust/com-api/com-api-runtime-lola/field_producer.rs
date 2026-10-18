@@ -25,16 +25,19 @@
 //! - `allocate()` / `FieldSampleMut::update()` → the field's `SkeletonEvent<T>` through the event FFI
 //!   (`EXPORT_MW_COM_FIELD` also registers the field's event under the field name), which is what
 //!   `SkeletonField<T>::Allocate()`/`Update(SampleAllocateePtr)` do as well. Only available after offering.
-//! - `register_set_handler()` → `SkeletonField<T>::RegisterSetHandler()`.
+//! - `register_set_handler()` → `SkeletonField<T>::RegisterSetHandler()`. Only the first registration is
+//!   passed on (see `LolaFieldPublisher::try_register_set_handler`).
 //! - `register_get_handler()`: LoLa has no custom get handler. The getter always answers with the latest
 //!   value set through `update()` or an accepted set call, so the callback is not installed (logged).
 
 use core::fmt::Debug;
+use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use bridge_ffi_rs::FFIBridge;
 use score_com_concept::{
-    CommData, Error, EventFailedReason, EventSampleMut, FieldPublisher, FieldSampleMut, Publisher, Result,
-    SampleMaybeUninit as SampleMaybeUninitTrait, SampleMut,
+    CommData, Error, EventFailedReason, EventSampleMut, FieldPublisher, FieldSampleMut, MethodFailedReason, Publisher,
+    Result, SampleMaybeUninit as SampleMaybeUninitTrait, SampleMut,
 };
 use score_log as log;
 
@@ -43,7 +46,7 @@ use crate::{LolaProviderInfo, LolaPublisher, LolaRuntimeImpl, LolaSampleMaybeUni
 /// Boxed field set-handler closure handed to C++: receives a pointer to the requested value and
 /// replaces it in place with the value to accept. Invoked by `bridge_ffi_lola`'s
 /// `mw_com_impl_call_field_set_handler`.
-pub(crate) type BoxedFieldSetHandlerFn = Box<dyn FnMut(*mut u8) + Send + 'static>;
+pub(crate) type BoxedFieldSetHandlerFn = Box<dyn Fn(*mut u8) + Send + Sync + 'static>;
 
 pub struct LolaFieldPublisher<T: CommData + Debug, B: FFIBridge> {
     /// The field's event, for zero-copy `allocate()`. `None` if the field's event cannot be found
@@ -54,6 +57,59 @@ pub struct LolaFieldPublisher<T: CommData + Debug, B: FFIBridge> {
     bridge: B,
     /// Keeps the shared skeleton alive for the field FFI calls below.
     provider: LolaProviderInfo<B>,
+    /// Set once a set handler is handed to C++; later registrations are refused.
+    set_handler_registered: AtomicBool,
+}
+
+impl<T: CommData + Debug, B: FFIBridge> LolaFieldPublisher<T, B> {
+    /// Registers `callback` unless a set handler is already registered. `SkeletonField::RegisterSetHandler`
+    /// replaces the stored handler without synchronization, and the replaced Rust box could never be freed,
+    /// so only the first registration reaches C++. C++ keeps that handler across StopOfferService, so it is
+    /// still served after an unoffer/offer cycle.
+    fn try_register_set_handler(&self, callback: impl Fn(T) -> T + Send + 'static) -> Result<()> {
+        if self.set_handler_registered.swap(true, Ordering::AcqRel) {
+            return Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered));
+        }
+
+        // The callback is only Send; the mutex makes the boxed handler Sync. C++ already runs one set
+        // handler at a time per field, so it is never contended.
+        let callback = Mutex::new(callback);
+        let handler: BoxedFieldSetHandlerFn = Box::new(move |value_ptr: *mut u8| {
+            let callback = callback.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let value_ptr = value_ptr as *mut T;
+            // SAFETY: C++ (SkeletonField<T>'s set handler) passes a pointer to its live, initialized T,
+            // valid for the duration of this call; registration checked that T matches the C++ field type.
+            // The value is moved out and the accepted one moved back in, so the slot holds exactly one
+            // live T again when C++ resumes.
+            unsafe {
+                let requested = value_ptr.read();
+                value_ptr.write((*callback)(requested));
+            }
+        });
+        let raw = Box::into_raw(handler);
+        // SAFETY: FatPtr is a binary-compatible reinterpretation of a `dyn Trait` fat pointer, the same
+        // technique method.rs's LolaMethodHandler relies on.
+        let fat_ptr: bridge_ffi_rs::FatPtr = unsafe { core::mem::transmute(raw) };
+        // SAFETY: skeleton_ptr() is valid while self.provider is alive; fat_ptr references the closure
+        // boxed above.
+        let registered = unsafe {
+            self.bridge.skeleton_field_register_set_handler(
+                self.provider.skeleton_ptr(),
+                self.provider.interface_id(),
+                self.identifier,
+                &fat_ptr,
+                core::mem::size_of::<T>(),
+                core::mem::align_of::<T>(),
+            )
+        };
+        if !registered {
+            // C++ never took ownership, so the box is freed here instead of leaking.
+            drop(unsafe { Box::from_raw(raw) });
+            self.set_handler_registered.store(false, Ordering::Release);
+            return Err(Error::MethodError(MethodFailedReason::HandlerRegistrationFailed));
+        }
+        Ok(())
+    }
 }
 
 impl<T: CommData + Debug, B: FFIBridge> FieldPublisher<T, LolaRuntimeImpl<B>> for LolaFieldPublisher<T, B> {
@@ -69,6 +125,7 @@ impl<T: CommData + Debug, B: FFIBridge> FieldPublisher<T, LolaRuntimeImpl<B>> fo
             identifier,
             bridge: instance_info.bridge().clone(),
             provider: instance_info,
+            set_handler_registered: AtomicBool::new(false),
         })
     }
 
@@ -91,6 +148,8 @@ impl<T: CommData + Debug, B: FFIBridge> FieldPublisher<T, LolaRuntimeImpl<B>> fo
                 self.provider.interface_id(),
                 self.identifier,
                 &value as *const T as *const u8,
+                core::mem::size_of::<T>(),
+                core::mem::align_of::<T>(),
             )
         };
         if updated {
@@ -101,37 +160,16 @@ impl<T: CommData + Debug, B: FFIBridge> FieldPublisher<T, LolaRuntimeImpl<B>> fo
     }
 
     fn register_set_handler(&self, callback: impl Fn(T) -> T + Send + 'static) {
-        let handler: BoxedFieldSetHandlerFn = Box::new(move |value_ptr: *mut u8| {
-            let value_ptr = value_ptr as *mut T;
-            // SAFETY: C++ (SkeletonField<T>'s set handler) passes a pointer to its live, initialized T,
-            // valid for the duration of this call. The value is moved out and the accepted one moved
-            // back in, so the slot holds exactly one live T again when C++ resumes.
-            unsafe {
-                let requested = value_ptr.read();
-                value_ptr.write(callback(requested));
-            }
-        });
-        let raw = Box::into_raw(handler);
-        // SAFETY: FatPtr is a binary-compatible reinterpretation of a `dyn Trait` fat pointer, the same
-        // technique method.rs's register_method_handler_raw relies on.
-        let fat_ptr: bridge_ffi_rs::FatPtr = unsafe { core::mem::transmute(raw) };
-        // SAFETY: skeleton_ptr() is valid while self.provider is alive; fat_ptr references the closure
-        // boxed above.
-        let registered = unsafe {
-            self.bridge.skeleton_field_register_set_handler(
-                self.provider.skeleton_ptr(),
-                self.provider.interface_id(),
-                self.identifier,
-                &fat_ptr,
-            )
-        };
-        if !registered {
-            // C++ never took ownership, so the box is freed here instead of leaking.
-            drop(unsafe { Box::from_raw(raw) });
-            log::error!(
+        match self.try_register_set_handler(callback) {
+            Ok(()) => {},
+            Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered)) => log::warn!(
+                "LolaFieldPublisher::register_set_handler: a set handler is already registered for this field; \
+                 the new handler is ignored and the first one stays in use"
+            ),
+            Err(_) => log::error!(
                 "LolaFieldPublisher::register_set_handler: the set handler was NOT registered (field not exported \
-                 via EXPORT_MW_COM_FIELD, no WithSetter tag, or registration failed)"
-            );
+                 via EXPORT_MW_COM_FIELD, no WithSetter tag, value type mismatch, or registration failed)"
+            ),
         }
     }
 
@@ -227,17 +265,17 @@ mod test {
     /// Calls the set handler closure exactly as `mw_com_impl_call_field_set_handler`
     /// (bridge_ffi_lola.rs) does, then frees the box, which has no real C++ owner here.
     unsafe fn call_and_free_set_handler(fat_ptr: FatPtr, value: *mut u8) {
-        type Callback = dyn FnMut(*mut u8);
+        type Callback = dyn Fn(*mut u8) + Send + Sync;
         // SAFETY: fat_ptr was captured from the mocked skeleton_field_register_set_handler call below.
-        let callable: &mut Callback = unsafe { core::mem::transmute(fat_ptr) };
+        let callable: &Callback = unsafe { core::mem::transmute(fat_ptr) };
         callable(value);
-        drop(unsafe { Box::from_raw(callable as *mut Callback) });
+        drop(unsafe { Box::from_raw(callable as *const Callback as *mut Callback) });
     }
 
     /// `update()` goes to SkeletonField::Update and `register_set_handler()` to
     /// SkeletonField::RegisterSetHandler, by field name; the set handler replaces the requested value
-    /// in place; `register_get_handler()` makes no FFI call at all (any unexpected call would fail the
-    /// mock).
+    /// in place, and a second `register_set_handler()` is refused without an FFI call;
+    /// `register_get_handler()` makes no FFI call at all (any unexpected call would fail the mock).
     #[test]
     fn test_field_update_and_set_handler_use_field_ffi() {
         let mut mock = MockFFIBridge::new();
@@ -246,6 +284,7 @@ mod test {
         let skeleton_alloc = MockPointerAllocator::<SkeletonBase>::new();
         let skel = skeleton_alloc.clone();
         mock.expect_create_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| skel.allocate());
 
@@ -254,9 +293,10 @@ mod test {
         mock.expect_skeleton_field_update()
             .times(1)
             .in_sequence(&mut seq)
-            .returning(move |_skeleton, interface_id, field_id, value| {
+            .returning(move |_skeleton, interface_id, field_id, value, size, align| {
                 assert_eq!(interface_id, "TestInterface");
                 assert_eq!(field_id, "speed");
+                assert_eq!((size, align), (4, 4));
                 // SAFETY: update() passes a pointer to a live FieldTestValue.
                 *upd.lock().expect("lock") = Some(unsafe { (value as *const FieldTestValue).read() });
                 true
@@ -267,15 +307,17 @@ mod test {
         mock.expect_skeleton_field_register_set_handler()
             .times(1)
             .in_sequence(&mut seq)
-            .returning(move |_skeleton, interface_id, field_id, fat_ptr| {
+            .returning(move |_skeleton, interface_id, field_id, fat_ptr, size, align| {
                 assert_eq!(interface_id, "TestInterface");
                 assert_eq!(field_id, "speed");
+                assert_eq!((size, align), (4, 4));
                 *cap_set.lock().expect("lock") = Some(*fat_ptr);
                 true
             });
 
         let skel_cleanup = skeleton_alloc.clone();
         mock.expect_destroy_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(skel_cleanup.free(ptr), "destroy_skeleton called with unknown pointer");
@@ -296,6 +338,7 @@ mod test {
             identifier: "speed",
             bridge: bridge.clone(),
             provider,
+            set_handler_registered: AtomicBool::new(false),
         };
 
         publisher
@@ -311,6 +354,11 @@ mod test {
             .expect("lock")
             .take()
             .expect("register_set_handler should have registered a handler");
+        assert!(matches!(
+            publisher.try_register_set_handler(|requested: FieldTestValue| requested),
+            Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered))
+        ));
+        publisher.register_set_handler(|requested: FieldTestValue| requested);
         let mut slot = FieldTestValue { value: 250 };
         unsafe { call_and_free_set_handler(set_fat_ptr, &mut slot as *mut FieldTestValue as *mut u8) };
         assert_eq!(slot, FieldTestValue { value: 100 });

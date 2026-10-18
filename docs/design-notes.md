@@ -130,43 +130,33 @@ REQUEST/REPLY with a preallocated, bounded receive-buffer pool.
 
 ---
 
-## 3. E2E protection for Rust methods (upstream #1062)
+## 3. E2E protection for Rust methods and fields (upstream #1062)
 
-### 3.1 Findings
+### 3.1 Upstream direction
 
 - Nothing in `score/mw/com` implements E2E protection today, on the C++ or the Rust side.
-- The AUTOSAR E2E protocol specification has, besides the regular profiles for signals and events, a method-specific
-  family (4m, 7m, 8m, 44m) that adds message type (request/response), message result and source id. Profile 4m uses a
-  16-byte header with CRC-32/AUTOSAR (polynomial `0xF4ACFB13`). Methods therefore need more header fields than events
-  or fields, even if the mechanism is shared.
-- E2E cannot detect a lost or delayed method response; that needs a separate timeout mechanism.
-- On Classic Platform the E2E transformer sits between RTE and the binding, invisible to application code. The
-  equivalent boundary here is the Rust/C++ FFI.
-- The method in-args and return buffers are allocated by C++ to the exact size of `Args`/`Return`. A framework-added
-  header therefore needs the size computation to grow on both sides at once (`CreateDataTypeSizeInfoFromTypes` and
+- The maintainers stated that S-CORE cannot provide E2E functionality based directly on the AUTOSAR specifications,
+  because of licensing restrictions.
+- They are designing an E2E protection/verification API for C++. The Rust API is to be derived from it: the API
+  mechanics can be designed freely, but the error classes are limited to what C++ provides.
+- Events come first, methods after.
+
+### 3.2 Decision
+
+No E2E code in this fork. An earlier standalone prototype based on an AUTOSAR profile was removed. The Rust work waits
+for the C++ API and starts with events.
+
+Points to carry into that work:
+
+- The method in-args and return buffers are allocated by C++ to the exact size of `Args`/`Return`. Any header added by
+  the framework needs the size computation to grow on both sides at once (`CreateDataTypeSizeInfoFromTypes` and
   `MethodArgsCodec::layout()`).
+- Methods need more protection metadata than events (request/response type, result, caller identity), so a shared
+  mechanism should not assume an identical header.
+- A lost or delayed method response is not detectable by payload protection; that needs a timeout.
+- `MethodHandlerCall::call` returns `Return`, not a `Result`, so a handler cannot refuse a request whose check failed
+  (an upstream concept change).
+- Rust-side protection alone covers only Rust-to-Rust traffic.
 
-AUTOSAR specification files are kept out of the tree (`.gitignore`).
-
-### 3.2 Prototype
-
-`docs/prototypes/e2e_profile4m_crc.rs` is a standalone Profile 4m protect/check implementation (`rustc -O
-e2e_profile4m_crc.rs`). It validates CRC-32/AUTOSAR against the public catalog check value (`0x1697d06a` for
-`"123456789"`) and shows that a corrupted payload is caught as `WrongCrc` and a replayed frame as `WrongSequence`.
-
-A version wired into the method call path, with a generic `E2E<T>` envelope and caller/handler wrappers tested
-against a mocked FFI, was explored and dropped: it tested no runtime code, and the real work is on the C++ side
-(§3.3).
-
-### 3.3 What a real implementation needs
-
-- C++: account for the header in the method buffer sizes, plus a real proxy/skeleton integration test of the
-  C++/Rust size agreement.
-- An E2E state machine (counter-delta tolerance, consecutive-failure counting, status verdict), configuration-driven
-  profile and DataID, and a real source id.
-- An `interface!`-level opt-in that instantiates the protected caller/handler.
-- A way for a method handler to refuse a request (`MethodHandlerCall::call` returns `Return`, not a `Result`; an
-  upstream concept change).
-- A unique `CommData::ID` per protected type, and a padding-safe byte view of the payload for the CRC.
-- Safety: Rust-side E2E alone protects only Rust-to-Rust traffic; requirement tracing to the AUTOSAR E2E requirements
-  is still to be agreed with the maintainers.
+If a product needs E2E before the upstream API exists, it belongs in the product layer at the payload level, using an
+implementation the product is licensed to use, so that it can be replaced by the upstream API later.

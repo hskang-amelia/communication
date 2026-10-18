@@ -47,7 +47,7 @@ impl<B: FFIBridge> Runtime for LolaRuntimeImpl<B> {
     type FieldPublisher<T: CommData + Debug> = LolaFieldPublisher<T, B>;
     type FieldSubscriber<T: CommData + Debug> = LolaFieldSubscriber<T, B>;
     // Same reasoning as MethodCaller/MethodHandler above: LolaFieldGetCaller/LolaFieldSetCaller
-    // (method.rs) delegate to LolaMethodCaller internally and need concrete `B` for the same reason.
+    // (method.rs) call the typed field FFI through their own proxy and need the concrete `B`.
     type FieldGetCaller<T: CommData + Debug> = LolaFieldGetCaller<T, B>;
     type FieldSetCaller<T: CommData + Debug> = LolaFieldSetCaller<T, B>;
     type ProviderInfo = LolaProviderInfo<B>;

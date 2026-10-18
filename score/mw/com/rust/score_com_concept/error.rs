@@ -103,8 +103,12 @@ pub enum MethodFailedReason {
     CallFailed,
     #[error("Failed to register a handler for a method")]
     HandlerRegistrationFailed,
+    #[error("A handler is already registered; only the first registration is used")]
+    HandlerAlreadyRegistered,
     #[error("Field get/set failed on the provider side or in the binding (error code {code})")]
     FieldAccessFailed { code: i32 },
+    #[error("The field's value type does not match the type the binding registered for the field")]
+    FieldTypeMismatch,
     #[error("Zero-copy arguments are not supported for this call")]
     ZeroCopyNotSupported,
 }

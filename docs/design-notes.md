@@ -21,19 +21,25 @@ functions. This fork implements that layer, scoped to upstream issue #782 (synch
   `EXPORT_MW_COM_METHOD` registers a `MethodMemberOperation` that returns those bindings;
   `ProxyMethodBaseView::GetMethodBinding()` was added as the proxy-side counterpart of the existing skeleton accessor.
 - Calls are synchronous and wrapped in an already-resolved `Future`. The C++ binding supports one call in flight
-  (`kCallQueueSize == 1`), so every call uses queue position 0.
+  (`kCallQueueSize == 1`), so every call uses queue position 0. The C++ `ProxyMethod`/`ProxyField` is not
+  thread-safe, so each Rust caller holds a mutex over the whole write-args/`DoCall`/read-return sequence.
 - **Argument layout.** C++ packs all arguments into one buffer with `type_erased_storage.h`
   (`CreateDataTypeSizeInfoFromTypes`/`SerializeArgs`): sequential fields, natural alignment, size rounded up to the
   largest alignment. A Rust tuple's layout is not guaranteed to match, so `MethodArgsCodec` (`score_com_concept`)
-  serializes `Args` field by field with the same algorithm, and `LolaMethodInArgAllocator` hands out zero-copy slots
-  at the same offsets. Both sides agree provided the buffer start is aligned, which the C++ allocation guarantees.
-- The in-args buffer size is checked against `Args::layout()` before writing; a mismatch returns an error instead of
-  overflowing the buffer.
+  serializes `Args` field by field with the same algorithm. Both sides agree provided the buffer start is aligned,
+  which the C++ allocation guarantees.
+- The in-args and return-value buffer sizes must equal `Args::layout()`/`size_of::<Return>()`; a mismatch returns an
+  error on the caller side and aborts on the handler side (as the typed C++ `SkeletonMethod` asserts).
+- Zero-copy arguments are not supported yet: `allocate()` returns `ZeroCopyNotSupported`. Slots in the C++ in-args
+  buffer cannot be tied to the caller's borrow with the current concept traits, and the buffer is reused by the next
+  call.
 - Void methods are detected with a `TypeId` check, since `Return` is generic in the concept traits.
 - `LolaMethodCaller`/`LolaMethodHandler` are parameterized over the concrete `B: FFIBridge` rather than the runtime,
   because they need `LolaConsumerInfo<B>`/`LolaProviderInfo<B>` and the bridge itself.
 - Known gap: `SkeletonMethodBinding` has no way to unregister a handler, so a registered Rust closure lives as long as
-  the process.
+  the process. Only the first `register_handler()`/`register_set_handler()` per handler object reaches C++ (C++
+  replaces handlers without a lock); C++ keeps it across `StopOfferService`, so unoffer/offer keeps serving it and a
+  later registration is logged and ignored.
 
 ### 1.3 Field FFI
 
@@ -56,7 +62,9 @@ So fields go through the typed C++ API instead. `EXPORT_MW_COM_FIELD(type, membe
    `RegisterSetHandler()`. Which operations a field supports is detected at compile time from the SFINAE-gated API,
    following its `WithGetter`/`WithSetter` tags.
 
-Values cross the boundary as raw `T` memory, which is sound for `CommData` (`Reloc`) types. On the Rust side,
+Values cross the boundary as raw `T` memory, which is sound for `CommData` (`Reloc`) types. Since the registry is
+keyed by name only, every field FFI call passes `size_of::<T>()`/`align_of::<T>()` and C++ rejects a mismatch with
+the field type (`kFieldTypeMismatch`, `FieldTypeMismatch` in Rust). On the Rust side,
 `LolaFieldGetCaller`/`LolaFieldSetCaller` call the field FFI (zero-copy set is not supported: `ProxyField<T>::Set`
 copies its argument), and `LolaFieldPublisher` maps `update()` to `SkeletonField::Update()` and
 `register_set_handler()` to `SkeletonField::RegisterSetHandler()`.

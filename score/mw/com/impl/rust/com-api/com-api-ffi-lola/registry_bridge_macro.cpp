@@ -51,6 +51,18 @@
 namespace score::mw::com::impl::rust
 {
 
+namespace field_detail
+{
+void LogFieldTypeMismatch(const std::size_t size,
+                          const std::size_t align,
+                          const std::size_t expected_size,
+                          const std::size_t expected_align) noexcept
+{
+    mw::log::LogError("com-api") << "Field access rejected: value size/alignment" << size << "/" << align
+                                 << "does not match the field type" << expected_size << "/" << expected_align;
+}
+}  // namespace field_detail
+
 extern "C" {
 
 /// \brief Get event pointer from proxy by event name
@@ -537,13 +549,16 @@ bool mw_com_skeleton_method_register_handler(SkeletonMethodBinding* binding, con
 /// \brief Call a field's getter (ProxyField<T>::Get()) and copy the received value into `out_value`.
 /// \param proxy_ptr Proxy created via mw_com_create_proxy
 /// \param out_value Uninitialized storage for one value of the field's type, owned by the caller
-/// \param out_error On failure: the C++ error code, or kFieldOperationUnavailable if the field is not exported via
-/// EXPORT_MW_COM_FIELD, has no WithGetter tag, or a pointer is invalid
+/// \param size, align Size and alignment of the caller's value type, checked against the field's type
+/// \param out_error On failure: the C++ error code, kFieldOperationUnavailable if the field is not exported via
+/// EXPORT_MW_COM_FIELD, has no WithGetter tag, or a pointer is invalid, or kFieldTypeMismatch
 /// \return true on success
 bool mw_com_proxy_field_get(ProxyBase* proxy_ptr,
                             StringView interface_id,
                             StringView field_id,
                             void* out_value,
+                            std::size_t size,
+                            std::size_t align,
                             std::int32_t* out_error)
 {
     auto* const ops = field_detail::FindFieldOperation(interface_id, field_id);
@@ -552,7 +567,7 @@ bool mw_com_proxy_field_get(ProxyBase* proxy_ptr,
         field_detail::SetError(out_error, kFieldOperationUnavailable);
         return false;
     }
-    return ops->ProxyGet(proxy_ptr, out_value, out_error);
+    return ops->ProxyGet(proxy_ptr, out_value, size, align, out_error);
 }
 
 /// \brief Call a field's setter (ProxyField<T>::Set()) with `*in_value` and copy the value the skeleton accepted
@@ -562,6 +577,8 @@ bool mw_com_proxy_field_set(ProxyBase* proxy_ptr,
                             StringView field_id,
                             const void* in_value,
                             void* out_value,
+                            std::size_t size,
+                            std::size_t align,
                             std::int32_t* out_error)
 {
     auto* const ops = field_detail::FindFieldOperation(interface_id, field_id);
@@ -570,24 +587,27 @@ bool mw_com_proxy_field_set(ProxyBase* proxy_ptr,
         field_detail::SetError(out_error, kFieldOperationUnavailable);
         return false;
     }
-    return ops->ProxySet(proxy_ptr, in_value, out_value, out_error);
+    return ops->ProxySet(proxy_ptr, in_value, out_value, size, align, out_error);
 }
 
 /// \brief Update a field's value (SkeletonField<T>::Update()). Before OfferService this stores the initial value.
 /// \param skeleton_ptr Skeleton created via mw_com_create_skeleton
 /// \param value Pointer to one value of the field's type
+/// \param size, align Size and alignment of the caller's value type, checked against the field's type
 /// \return true on success
 bool mw_com_skeleton_field_update(SkeletonBase* skeleton_ptr,
                                   StringView interface_id,
                                   StringView field_id,
-                                  const void* value)
+                                  const void* value,
+                                  std::size_t size,
+                                  std::size_t align)
 {
     auto* const ops = field_detail::FindFieldOperation(interface_id, field_id);
     if ((ops == nullptr) || (skeleton_ptr == nullptr))
     {
         return false;
     }
-    return ops->SkeletonUpdate(skeleton_ptr, value);
+    return ops->SkeletonUpdate(skeleton_ptr, value, size, align);
 }
 
 /// \brief Install a Rust closure as a field's set handler (SkeletonField<T>::RegisterSetHandler()).
@@ -596,19 +616,22 @@ bool mw_com_skeleton_field_update(SkeletonBase* skeleton_ptr,
 /// SkeletonField publish the accepted value to subscribers. Same handler-disposal gap as
 /// mw_com_skeleton_method_register_handler: the boxed closure lives as long as the process.
 /// \param boxed_handler Pointer to FatPtr containing the Rust closure
-/// \return true if the handler was registered; false if the field is not exported, has no WithSetter tag, or the
-/// registration failed
+/// \param size, align Size and alignment of the handler's value type, checked against the field's type
+/// \return true if the handler was registered; false if the field is not exported, has no WithSetter tag, the value
+/// type does not match, or the registration failed
 bool mw_com_skeleton_field_register_set_handler(SkeletonBase* skeleton_ptr,
                                                 StringView interface_id,
                                                 StringView field_id,
-                                                const FatPtr* boxed_handler)
+                                                const FatPtr* boxed_handler,
+                                                std::size_t size,
+                                                std::size_t align)
 {
     auto* const ops = field_detail::FindFieldOperation(interface_id, field_id);
     if ((ops == nullptr) || (skeleton_ptr == nullptr) || (boxed_handler == nullptr))
     {
         return false;
     }
-    return ops->SkeletonRegisterSetHandler(skeleton_ptr, *boxed_handler);
+    return ops->SkeletonRegisterSetHandler(skeleton_ptr, *boxed_handler, size, align);
 }
 
 // --- Field subscription queries. A field's notifier is a real ProxyEvent<T>, so FieldSubscription's

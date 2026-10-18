@@ -81,6 +81,7 @@
 
 #include <score/assert.hpp>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <new>
@@ -652,6 +653,10 @@ class MethodMemberOperationImpl : public MethodMemberOperation
 /// was not of the expected type, or the field lacks the tag the operation needs (WithGetter / WithSetter).
 constexpr std::int32_t kFieldOperationUnavailable = -1;
 
+/// \brief Value passed in `out_error` by FieldMemberOperation when the caller's value size/alignment does not match
+/// the field's FieldType. The field registry is keyed by name only, so this is what catches a Rust/C++ type mismatch.
+constexpr std::int32_t kFieldTypeMismatch = -2;
+
 /// \brief Interface for typed access to a Field member's get/set/update operations from the Rust FFI layer.
 /// \details Fields go through the typed ProxyField<T>/SkeletonField<T> API rather
 /// than the type-erased method bindings underneath them: the getter/setter return type on the wire is
@@ -666,23 +671,36 @@ class FieldMemberOperation
 
     /// \brief Calls ProxyField<T>::Get() and copy-constructs the received value into `out_value`.
     /// \param out_value Uninitialized storage for one FieldType, owned by the caller
-    /// \param out_error On failure, the C++ error code, or kFieldOperationUnavailable
+    /// \param size, align Size and alignment of the caller's value type; must equal those of FieldType
+    /// \param out_error On failure, the C++ error code, kFieldOperationUnavailable or kFieldTypeMismatch
     /// \return true on success
-    virtual bool ProxyGet(ProxyBase* proxy_ptr, void* out_value, std::int32_t* out_error) = 0;
+    virtual bool ProxyGet(ProxyBase* proxy_ptr,
+                          void* out_value,
+                          std::size_t size,
+                          std::size_t align,
+                          std::int32_t* out_error) = 0;
 
     /// \brief Calls ProxyField<T>::Set(*in_value) and copy-constructs the value the skeleton accepted into
     /// `out_value`. See ProxyGet for the parameters.
-    virtual bool ProxySet(ProxyBase* proxy_ptr, const void* in_value, void* out_value, std::int32_t* out_error) = 0;
+    virtual bool ProxySet(ProxyBase* proxy_ptr,
+                          const void* in_value,
+                          void* out_value,
+                          std::size_t size,
+                          std::size_t align,
+                          std::int32_t* out_error) = 0;
 
     /// \brief Calls SkeletonField<T>::Update(*value). Before OfferService this stores the initial value, which
-    /// SkeletonField requires before it can be offered.
-    virtual bool SkeletonUpdate(SkeletonBase* skeleton_ptr, const void* value) = 0;
+    /// SkeletonField requires before it can be offered. Fails if `size`/`align` do not match FieldType.
+    virtual bool SkeletonUpdate(SkeletonBase* skeleton_ptr, const void* value, std::size_t size, std::size_t align) = 0;
 
     /// \brief Installs a Rust closure as the field's set handler via SkeletonField<T>::RegisterSetHandler.
     /// \details The closure is invoked through mw_com_impl_call_field_set_handler. SkeletonField has no hook to
     /// unregister a set handler, so the boxed closure lives as long as the process (the same known gap as
-    /// mw_com_skeleton_method_register_handler).
-    virtual bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr, FatPtr handler) = 0;
+    /// mw_com_skeleton_method_register_handler). Fails if `size`/`align` do not match FieldType.
+    virtual bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr,
+                                            FatPtr handler,
+                                            std::size_t size,
+                                            std::size_t align) = 0;
 };
 
 namespace field_detail
@@ -733,6 +751,12 @@ inline void SetError(std::int32_t* out_error, const ErrorType& error) noexcept
 {
     SetError(out_error, static_cast<std::int32_t>(*error));
 }
+
+/// \brief Logs a FieldMemberOperation call rejected because of a value size/alignment mismatch.
+void LogFieldTypeMismatch(std::size_t size,
+                          std::size_t align,
+                          std::size_t expected_size,
+                          std::size_t expected_align) noexcept;
 }  // namespace field_detail
 
 /// \brief Template implementation of FieldMemberOperation for a ProxyField<FieldType, Tags...>/
@@ -747,9 +771,29 @@ class FieldMemberOperationImpl : public FieldMemberOperation
     using ProxyFieldType = std::remove_reference_t<decltype(std::declval<ProxyType&>().*proxy_field_member)>;
     using SkeletonFieldType = std::remove_reference_t<decltype(std::declval<SkeletonType&>().*skeleton_field_member)>;
 
-  public:
-    bool ProxyGet(ProxyBase* proxy_ptr, void* out_value, std::int32_t* out_error) override
+    /// \brief Whether the caller's value type has FieldType's size and alignment (logged if not).
+    static bool MatchesFieldType(const std::size_t size, const std::size_t align) noexcept
     {
+        if ((size == sizeof(FieldType)) && (align == alignof(FieldType)))
+        {
+            return true;
+        }
+        field_detail::LogFieldTypeMismatch(size, align, sizeof(FieldType), alignof(FieldType));
+        return false;
+    }
+
+  public:
+    bool ProxyGet(ProxyBase* proxy_ptr,
+                  void* out_value,
+                  const std::size_t size,
+                  const std::size_t align,
+                  std::int32_t* out_error) override
+    {
+        if (!MatchesFieldType(size, align))
+        {
+            field_detail::SetError(out_error, kFieldTypeMismatch);
+            return false;
+        }
         if constexpr (field_detail::HasGetter<ProxyFieldType>::value)
         {
             auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
@@ -776,8 +820,18 @@ class FieldMemberOperationImpl : public FieldMemberOperation
         }
     }
 
-    bool ProxySet(ProxyBase* proxy_ptr, const void* in_value, void* out_value, std::int32_t* out_error) override
+    bool ProxySet(ProxyBase* proxy_ptr,
+                  const void* in_value,
+                  void* out_value,
+                  const std::size_t size,
+                  const std::size_t align,
+                  std::int32_t* out_error) override
     {
+        if (!MatchesFieldType(size, align))
+        {
+            field_detail::SetError(out_error, kFieldTypeMismatch);
+            return false;
+        }
         if constexpr (field_detail::HasSetter<ProxyFieldType, FieldType>::value)
         {
             auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
@@ -805,8 +859,15 @@ class FieldMemberOperationImpl : public FieldMemberOperation
         }
     }
 
-    bool SkeletonUpdate(SkeletonBase* skeleton_ptr, const void* value) override
+    bool SkeletonUpdate(SkeletonBase* skeleton_ptr,
+                        const void* value,
+                        const std::size_t size,
+                        const std::size_t align) override
     {
+        if (!MatchesFieldType(size, align))
+        {
+            return false;
+        }
         auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
         if ((skeleton == nullptr) || (value == nullptr))
         {
@@ -815,8 +876,15 @@ class FieldMemberOperationImpl : public FieldMemberOperation
         return (skeleton->*skeleton_field_member).Update(*static_cast<const FieldType*>(value)).has_value();
     }
 
-    bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr, FatPtr handler) override
+    bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr,
+                                    FatPtr handler,
+                                    const std::size_t size,
+                                    const std::size_t align) override
     {
+        if (!MatchesFieldType(size, align))
+        {
+            return false;
+        }
         if constexpr (field_detail::HasSetHandler<SkeletonFieldType, FieldType>::value)
         {
             auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);

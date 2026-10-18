@@ -13,7 +13,6 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//quality/unit_testing:unit_testing.bzl", "cc_unit_test")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -36,7 +35,6 @@ cc_library(
     name = "sample_payload_idl",
     srcs = ["sample_payload.c"],
     hdrs = ["sample_payload.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["manual"],
     deps = ["@cyclonedds//:ddsc"],
 )
@@ -45,7 +43,6 @@ cc_library(
     name = "dds_transport",
     srcs = ["dds_transport.cpp"],
     hdrs = ["dds_transport.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["manual"],
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
@@ -67,7 +64,6 @@ cc_library(
 cc_unit_test(
     name = "dds_transport_test",
     srcs = ["dds_transport_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["manual"],
     deps = [
         ":dds_transport",

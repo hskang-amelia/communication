@@ -47,6 +47,13 @@ cc_library(
     name = "transport_factory",
     srcs = ["transport_factory.cpp"],
     hdrs = ["transport_factory.h"],
+    local_defines = select({
+        "//score/mw/com/gateway/transport_layer/network:config_with_zenoh_pico": ["SCORE_GATEWAY_WITH_ZENOH_PICO"],
+        "//conditions:default": [],
+    }) + select({
+        "//score/mw/com/gateway/transport_layer/network:config_with_cyclone_dds": ["SCORE_GATEWAY_WITH_CYCLONE_DDS"],
+        "//conditions:default": [],
+    }),
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
     ],
@@ -62,7 +69,20 @@ cc_library(
         "//score/mw/com/gateway/transport_layer/sample:sample_hypervisor_transport",
         "//score/mw/com/gateway/transport_layer/sample/configuration:hypervisor_socket_configuration",
         "//score/mw/com/gateway/transport_layer/sample/configuration:sample_transport_config_parser",
-    ],
+        # Middleware-independent; only the bus libraries below pull in zenoh-pico / Cyclone DDS.
+        "//score/mw/com/gateway/transport_layer/network:network_transport",
+        "//score/mw/com/gateway/transport_layer/network/configuration:network_transport_config_parser",
+    ] + select({
+        "//score/mw/com/gateway/transport_layer/network:config_with_zenoh_pico": [
+            "//score/mw/com/gateway/transport_layer/network/zenoh:zenoh_pico_bus",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//score/mw/com/gateway/transport_layer/network:config_with_cyclone_dds": [
+            "//score/mw/com/gateway/transport_layer/network/dds:cyclone_dds_bus",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

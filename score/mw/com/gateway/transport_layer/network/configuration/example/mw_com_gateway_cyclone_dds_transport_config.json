@@ -1,0 +1,13 @@
+{
+  "rpc": {
+    "ack-timeout-ms": 200,
+    "max-attempts": 10
+  },
+  "cyclone-dds": {
+    "domain-id": 0,
+    "local-topic": "score_gateway_hpc",
+    "remote-topic": "score_gateway_zonal_front",
+    "history-depth": 256,
+    "wait-for-peer-ms": 2000
+  }
+}

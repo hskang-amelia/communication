@@ -25,6 +25,8 @@ cc_library(
         "//score/mw/com:runtime",
         "//score/mw/com:runtime_configuration",
         "//score/mw/com:types",
+        "//score/mw/com/impl:proxy_field",
+        "//score/mw/com/impl:skeleton_field",
         "//score/mw/com/impl/plumbing:sample_ptr",
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/string_manipulation/arguments",

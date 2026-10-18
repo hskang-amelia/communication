@@ -149,7 +149,7 @@ ChannelStatus RpcChannel::PublishBuffer(const std::vector<std::uint8_t>& buffer)
 {
     std::lock_guard<std::mutex> lock{publish_mutex_};
     return (bus_.Publish(buffer.data(), buffer.size()) == BusStatus::kOk) ? ChannelStatus::kOk
-                                                                           : ChannelStatus::kPublishFailed;
+                                                                          : ChannelStatus::kPublishFailed;
 }
 
 ChannelStatus RpcChannel::SendRequest(const FrameBody& body)

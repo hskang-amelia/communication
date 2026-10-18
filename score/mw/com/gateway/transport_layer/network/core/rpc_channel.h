@@ -110,7 +110,10 @@ class RpcChannel
                                   const std::uint8_t* data,
                                   std::size_t size);
 
-    std::uint64_t SessionId() const noexcept { return session_id_; }
+    std::uint64_t SessionId() const noexcept
+    {
+        return session_id_;
+    }
 
     RpcChannelStatistics Statistics() const;
 

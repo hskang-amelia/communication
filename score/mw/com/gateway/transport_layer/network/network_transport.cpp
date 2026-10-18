@@ -118,8 +118,8 @@ void LogIfFailed(const score::Result<void>& result, std::string_view what)
 {
     if (!result.has_value())
     {
-        score::mw::log::LogError(kLogContext) << "NetworkTransport: GatewayCore" << what
-                                             << "failed:" << result.error().Message();
+        score::mw::log::LogError(kLogContext)
+            << "NetworkTransport: GatewayCore" << what << "failed:" << result.error().Message();
     }
 }
 
@@ -153,7 +153,8 @@ score::Result<void> NetworkTransport::Setup()
     });
     if (status != ChannelStatus::kOk)
     {
-        score::mw::log::LogError(kLogContext) << "NetworkTransport: setup failed:" << std::string_view{ToString(status)};
+        score::mw::log::LogError(kLogContext)
+            << "NetworkTransport: setup failed:" << std::string_view{ToString(status)};
         return score::MakeUnexpected(TransportErrorc::kServerSetupFailed);
     }
     return {};
@@ -329,11 +330,12 @@ void NetworkTransport::Dispatch(const Frame& frame)
     }
     else if (const auto* update = std::get_if<UpdateNotification>(&frame.body))
     {
-        WithInstance(update->ref.instance, "UpdateNotification", [this, update](score::mw::com::InstanceSpecifier spec) {
-            LogIfFailed(gateway_core_.NotifyUpdate(
-                            std::move(spec), FromWireKind(update->ref.kind), std::string{update->ref.element}),
-                        "NotifyUpdate");
-        });
+        WithInstance(
+            update->ref.instance, "UpdateNotification", [this, update](score::mw::com::InstanceSpecifier spec) {
+                LogIfFailed(gateway_core_.NotifyUpdate(
+                                std::move(spec), FromWireKind(update->ref.kind), std::string{update->ref.element}),
+                            "NotifyUpdate");
+            });
     }
     else if (const auto* sample = std::get_if<EventSample>(&frame.body))
     {

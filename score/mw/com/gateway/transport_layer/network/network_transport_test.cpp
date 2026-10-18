@@ -112,20 +112,20 @@ TEST_F(NetworkTransportTest, ProvideServiceReachesRemoteCoreWithEventMetadata)
 {
     std::promise<void> called{};
     EXPECT_CALL(destination_core_, ProvideService(_, _))
-        .WillOnce(Invoke([&called](score::mw::com::InstanceSpecifier specifier,
-                                   std::vector<score::mw::com::EventInfo> events) {
-            EXPECT_EQ(specifier.ToString(), kInstance);
-            EXPECT_EQ(events.size(), 2U);
-            if (events.size() == 2U)
-            {
-                EXPECT_EQ(events[0].name, "speed");
-                EXPECT_EQ(events[0].data_type_meta_info.size, 8U);
-                EXPECT_EQ(events[0].data_type_meta_info.alignment, 8U);
-                EXPECT_EQ(events[1].name, "status");
-            }
-            called.set_value();
-            return score::Result<void>{};
-        }));
+        .WillOnce(Invoke(
+            [&called](score::mw::com::InstanceSpecifier specifier, std::vector<score::mw::com::EventInfo> events) {
+                EXPECT_EQ(specifier.ToString(), kInstance);
+                EXPECT_EQ(events.size(), 2U);
+                if (events.size() == 2U)
+                {
+                    EXPECT_EQ(events[0].name, "speed");
+                    EXPECT_EQ(events[0].data_type_meta_info.size, 8U);
+                    EXPECT_EQ(events[0].data_type_meta_info.alignment, 8U);
+                    EXPECT_EQ(events[1].name, "status");
+                }
+                called.set_value();
+                return score::Result<void>{};
+            }));
 
     const std::vector<score::mw::com::EventInfo> events{
         score::mw::com::impl::EventInfo{"speed", score::mw::com::impl::DataTypeMetaInfo{8U, 8U}},
@@ -197,12 +197,11 @@ TEST_F(NetworkTransportTest, ForwardSampleDataDeliversBytesToRemoteCore)
 TEST_F(NetworkTransportTest, ForwardSampleDataSupportsEventsOnly)
 {
     const std::uint8_t byte{0U};
-    EXPECT_FALSE(source_
-                     ->ForwardSampleData(Specifier(),
-                                         impl::ServiceElementType::FIELD,
-                                         "f",
-                                         score::cpp::span<const std::uint8_t>{&byte, 1U})
-                     .has_value());
+    EXPECT_FALSE(
+        source_
+            ->ForwardSampleData(
+                Specifier(), impl::ServiceElementType::FIELD, "f", score::cpp::span<const std::uint8_t>{&byte, 1U})
+            .has_value());
 }
 
 TEST_F(NetworkTransportTest, NestedRequestFromRemoteCoreDoesNotDeadlock)

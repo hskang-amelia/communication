@@ -27,13 +27,25 @@ class Writer
   public:
     explicit Writer(std::vector<std::uint8_t>& out) noexcept : out_{out} {}
 
-    void U8(std::uint8_t value) { out_.push_back(value); }
+    void U8(std::uint8_t value)
+    {
+        out_.push_back(value);
+    }
 
-    void U16(std::uint16_t value) { PutLittleEndian(value); }
+    void U16(std::uint16_t value)
+    {
+        PutLittleEndian(value);
+    }
 
-    void U32(std::uint32_t value) { PutLittleEndian(value); }
+    void U32(std::uint32_t value)
+    {
+        PutLittleEndian(value);
+    }
 
-    void U64(std::uint64_t value) { PutLittleEndian(value); }
+    void U64(std::uint64_t value)
+    {
+        PutLittleEndian(value);
+    }
 
     bool Str(const std::string& value)
     {
@@ -81,13 +93,25 @@ class Reader
   public:
     Reader(const std::uint8_t* data, std::size_t size) noexcept : data_{data}, size_{size} {}
 
-    bool U8(std::uint8_t& value) { return GetLittleEndian(value); }
+    bool U8(std::uint8_t& value)
+    {
+        return GetLittleEndian(value);
+    }
 
-    bool U16(std::uint16_t& value) { return GetLittleEndian(value); }
+    bool U16(std::uint16_t& value)
+    {
+        return GetLittleEndian(value);
+    }
 
-    bool U32(std::uint32_t& value) { return GetLittleEndian(value); }
+    bool U32(std::uint32_t& value)
+    {
+        return GetLittleEndian(value);
+    }
 
-    bool U64(std::uint64_t& value) { return GetLittleEndian(value); }
+    bool U64(std::uint64_t& value)
+    {
+        return GetLittleEndian(value);
+    }
 
     bool Str(std::string& value)
     {
@@ -113,7 +137,10 @@ class Reader
         return true;
     }
 
-    std::size_t Remaining() const noexcept { return size_ - offset_; }
+    std::size_t Remaining() const noexcept
+    {
+        return size_ - offset_;
+    }
 
   private:
     template <typename T>
@@ -215,15 +242,30 @@ struct BodyWriter
         return true;
     }
 
-    bool operator()(const OfferService& body) const { return Instance(body.instance); }
+    bool operator()(const OfferService& body) const
+    {
+        return Instance(body.instance);
+    }
 
-    bool operator()(const StopOfferService& body) const { return Instance(body.instance); }
+    bool operator()(const StopOfferService& body) const
+    {
+        return Instance(body.instance);
+    }
 
-    bool operator()(const RegisterNotification& body) const { return Ref(body.ref); }
+    bool operator()(const RegisterNotification& body) const
+    {
+        return Ref(body.ref);
+    }
 
-    bool operator()(const UnregisterNotification& body) const { return Ref(body.ref); }
+    bool operator()(const UnregisterNotification& body) const
+    {
+        return Ref(body.ref);
+    }
 
-    bool operator()(const UpdateNotification& body) const { return Ref(body.ref); }
+    bool operator()(const UpdateNotification& body) const
+    {
+        return Ref(body.ref);
+    }
 
     bool operator()(const EventSample& body) const
     {

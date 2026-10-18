@@ -159,8 +159,8 @@ TEST(WireFormatTest, EncodeEventSampleMatchesGenericEncoding)
     EncodeError error{EncodeError::kNone};
     ASSERT_TRUE(EncodeEventSample(5U, 6U, "inst", "evt", payload.data(), payload.size(), direct, error));
     std::vector<std::uint8_t> generic{};
-    ASSERT_TRUE(Encode(FrameHeader{FrameKind::kEventSample, 5U, 6U}, EventSample{"inst", "evt", payload}, generic,
-                       error));
+    ASSERT_TRUE(
+        Encode(FrameHeader{FrameKind::kEventSample, 5U, 6U}, EventSample{"inst", "evt", payload}, generic, error));
     EXPECT_EQ(direct, generic);
 }
 

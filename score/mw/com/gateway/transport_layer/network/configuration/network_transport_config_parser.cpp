@@ -206,9 +206,9 @@ NetworkTransportConfig ParseNetworkTransportConfig(std::string_view path, Networ
     auto json_result = json_parser_obj.FromFile(path);
     if (!json_result.has_value())
     {
-        ::score::mw::log::LogFatal("lola") << "Parsing network transport config file" << path
-                                           << "failed with error:" << json_result.error().Message() << ": "
-                                           << json_result.error().UserMessage() << " . Terminating.";
+        ::score::mw::log::LogFatal("lola")
+            << "Parsing network transport config file" << path << "failed with error:" << json_result.error().Message()
+            << ": " << json_result.error().UserMessage() << " . Terminating.";
         std::terminate();
     }
     return ParseNetworkTransportConfig(std::move(json_result).value(), backend);

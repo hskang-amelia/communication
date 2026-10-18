@@ -12,6 +12,7 @@
  ********************************************************************************/
 #include "score/mw/com/gateway/transport_layer/network/configuration/network_transport_config_parser.h"
 
+#include "score/mw/com/gateway/transport_layer/network/core/wire_format.h"
 #include "score/mw/log/logging.h"
 
 #include <score/assert.hpp>
@@ -118,7 +119,10 @@ void ParseRpc(const score::json::Object& top, RpcChannelConfig& rpc)
     std::uint32_t queue{static_cast<std::uint32_t>(rpc.max_dispatch_queue)};
     Optional(object, kMaxDispatchQueueKey, queue);
     rpc.max_dispatch_queue = queue;
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.ack_timeout.count() > 0, "rpc.ack-timeout-ms must be > 0");
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_attempts > 0U, "rpc.max-attempts must be > 0");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.dedupe_window > 0U, "rpc.dedupe-window must be > 0");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_dispatch_queue > 0U, "rpc.max-dispatch-queue must be > 0");
 }
 
 void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
@@ -148,6 +152,8 @@ void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
             const auto type_id = event_value.As<std::string>();
             SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(type_id.has_value() && !type_id.value().get().empty(),
                                                         "type-check.type-ids values must be non-empty strings");
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(type_id.value().get().size() <= kMaxStringLength,
+                                                        "type-check.type-ids values must not exceed 65535 bytes");
             target[std::string{event_key.GetAsStringView()}] = type_id.value().get();
         }
     }
@@ -169,6 +175,10 @@ void ParseZenohPico(const score::json::Object& top, ZenohPicoBusConfig& config)
                                                 "zenoh-pico.mode must be \"peer\" or \"client\"");
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(!config.connect.empty() || !config.listen.empty(),
                                                 "zenoh-pico needs a connect or listen endpoint");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.local_key != config.remote_key,
+                                                "zenoh-pico.local-key and remote-key must differ");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.max_frame_size >= 64U,
+                                                "zenoh-pico.max-frame-size must be >= 64");
 }
 
 void ParseCycloneDds(const score::json::Object& top, CycloneDdsBusConfig& config)
@@ -181,6 +191,10 @@ void ParseCycloneDds(const score::json::Object& top, CycloneDdsBusConfig& config
     OptionalMs(object, kMaxBlockingTimeMsKey, config.max_blocking_time);
     OptionalString(object, kConfigXmlKey, config.cyclone_config_xml);
     OptionalMs(object, kWaitForPeerMsKey, config.wait_for_peer);
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.local_topic != config.remote_topic,
+                                                "cyclone-dds.local-topic and remote-topic must differ");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.domain_id <= 232U, "cyclone-dds.domain-id must be <= 232");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.history_depth > 0, "cyclone-dds.history-depth must be > 0");
 }
 
 }  // namespace

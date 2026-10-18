@@ -237,6 +237,19 @@ TEST(WireFormatTest, HugeDeclaredLengthIsTruncatedNotAllocated)
     EXPECT_EQ(Decode(bytes.data(), bytes.size()).error, DecodeError::kTruncated);
 }
 
+TEST(WireFormatTest, HugeEventCountIsTruncatedNotAllocated)
+{
+    auto bytes = EncodeOrFail(ProvideService{"i", {}});
+    // Overwrite the u16 event count (last 2 bytes) with 0xFFFF; no event data follows.
+    bytes[bytes.size() - 2U] = 0xFFU;
+    bytes[bytes.size() - 1U] = 0xFFU;
+    EXPECT_EQ(Decode(bytes.data(), bytes.size()).error, DecodeError::kTruncated);
+
+    // An event with empty strings is the smallest valid encoding and still decodes.
+    const auto minimal = DecodeOrFail(EncodeOrFail(ProvideService{"i", {{"", 0U, 0U, ""}}}));
+    EXPECT_EQ(std::get<ProvideService>(minimal.body).events.size(), 1U);
+}
+
 TEST(WireFormatTest, AckRequirement)
 {
     EXPECT_TRUE(RequiresAck(FrameKind::kProvideService));

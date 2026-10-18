@@ -305,6 +305,13 @@ DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, Frame
             {
                 return DecodeError::kTruncated;
             }
+            // Smallest encoding of one EventMeta: name length (u16), size (u64), alignment (u64) and, since
+            // version 2, type_id length (u16). Checked before reserving, so count cannot force a large allocation.
+            const std::size_t min_event_size{(version >= 2U) ? 20U : 18U};
+            if ((static_cast<std::size_t>(count) * min_event_size) > reader.Remaining())
+            {
+                return DecodeError::kTruncated;
+            }
             value.events.reserve(count);
             for (std::uint16_t i = 0U; i < count; ++i)
             {

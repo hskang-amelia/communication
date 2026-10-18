@@ -15,6 +15,7 @@
 #include "score/message_passing/unix_domain/unix_domain_socket_address.h"
 
 #include <future>
+#include <limits>
 #include <tuple>
 
 namespace score::message_passing
@@ -195,6 +196,11 @@ score::cpp::expected_blank<score::os::Error> UnixDomainEngine::SendProtocolMessa
     struct msghdr msg;
     std::ignore = std::memset(static_cast<void*>(&msg), 0, sizeof(msg));
     constexpr auto kVectorCount = 3UL;
+    if (message.size() > static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+    {
+        // The frame header's length field is 16 bits wide; a longer payload would wrap and desynchronize the stream.
+        return score::cpp::make_unexpected(score::os::Error::createFromErrno(EMSGSIZE));
+    }
     std::uint16_t size = static_cast<std::uint16_t>(message.size());
     std::array<iovec, kVectorCount> io;
     // Deviation of MISRA RULE-6-8-3: codeql::misra_deviation_next_line(unix-domain-iovec-stack-buffers)

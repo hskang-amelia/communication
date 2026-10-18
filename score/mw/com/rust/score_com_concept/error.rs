@@ -87,6 +87,28 @@ pub enum ReceiveFailedReason {
     BufferOverflow { max: usize },
 }
 
+/// Error reasons for method and field get/set failures (calling on the consumer side, or registering
+/// a handler on the producer side).
+#[derive(Debug, ScoreDebug, Error)]
+pub enum MethodFailedReason {
+    #[error("Method caller creation failed, possibly because the proxy method binding could not be constructed")]
+    MethodCallerCreationFailed,
+    #[error("Method handler creation failed, possibly because the skeleton method binding could not be constructed")]
+    MethodHandlerCreationFailed,
+    #[error("Failed to retrieve the in-arguments buffer for a method call")]
+    InArgsBufferUnavailable,
+    #[error("Failed to retrieve the return-value buffer for a method call")]
+    ReturnValueBufferUnavailable,
+    #[error("The method call itself failed on the provider side")]
+    CallFailed,
+    #[error("Failed to register a handler for a method")]
+    HandlerRegistrationFailed,
+    #[error("Field get/set failed on the provider side or in the binding (error code {code})")]
+    FieldAccessFailed { code: i32 },
+    #[error("Zero-copy arguments are not supported for this call")]
+    ZeroCopyNotSupported,
+}
+
 /// Comprehensive error reasons for event-related failures
 #[derive(Debug, ScoreDebug, Error)]
 pub enum EventFailedReason {
@@ -119,4 +141,6 @@ pub enum Error {
     AllocateError(AllocationFailureReason),
     #[error("Receive operation failed due to: {0}")]
     ReceiveError(ReceiveFailedReason),
+    #[error("Method operation failed due to: {0}")]
+    MethodError(MethodFailedReason),
 }

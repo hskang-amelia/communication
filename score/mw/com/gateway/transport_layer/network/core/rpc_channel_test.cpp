@@ -73,7 +73,19 @@ RpcChannelConfig FastConfig()
     RpcChannelConfig config{};
     config.ack_timeout = 50ms;
     config.max_attempts = 5U;
+    config.result_timeout = 500ms;
     return config;
+}
+
+/// Dispatcher of a channel that answers every ProvideService/OfferService with the given status.
+RpcChannel::FrameDispatcher Answering(std::unique_ptr<RpcChannel>& channel, RequestStatus status)
+{
+    return [&channel, status](const Frame& frame) {
+        if (std::holds_alternative<ProvideService>(frame.body) || std::holds_alternative<OfferService>(frame.body))
+        {
+            static_cast<void>(channel->SendResult(frame.header, status));
+        }
+    };
 }
 
 class RpcChannelTest : public ::testing::Test
@@ -396,6 +408,171 @@ TEST_F(RpcChannelTest, StopFromDispatcherThenRestartWorks)
               ChannelStatus::kOk);
     EXPECT_EQ(a_->SendRequest(OfferService{"again"}), ChannelStatus::kOk);
     EXPECT_TRUE(recorder_b_.WaitFor(1U));
+}
+
+TEST_F(RpcChannelTest, ResultOfTheRequestIsReturnedToTheCaller)
+{
+    ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start([this](const Frame& frame) {
+        const auto status =
+            std::holds_alternative<ProvideService>(frame.body) ? RequestStatus::kRejected : RequestStatus::kFailed;
+        EXPECT_EQ(b_->SendResult(frame.header, status), ChannelStatus::kOk);
+    }),
+              ChannelStatus::kOk);
+
+    RequestStatus status{RequestStatus::kOk};
+    EXPECT_EQ(a_->SendRequestForResult(ProvideService{"svc", {}}, status), ChannelStatus::kOk);
+    EXPECT_EQ(status, RequestStatus::kRejected);
+    EXPECT_EQ(a_->SendRequestForResult(OfferService{"svc"}, status), ChannelStatus::kOk);
+    EXPECT_EQ(status, RequestStatus::kFailed);
+    // Results are consumed by the channel, never dispatched.
+    EXPECT_EQ(a_->Statistics().requests_dispatched, 0U);
+}
+
+TEST_F(RpcChannelTest, NoResultWhenPeerNeverAnswers)
+{
+    StartBoth();
+    RequestStatus status{RequestStatus::kOk};
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(a_->SendRequestForResult(OfferService{"svc"}, status), ChannelStatus::kNoResult);
+    EXPECT_GE(std::chrono::steady_clock::now() - start, FastConfig().result_timeout);
+    // The request itself was delivered.
+    EXPECT_TRUE(recorder_b_.WaitFor(1U));
+}
+
+TEST_F(RpcChannelTest, LateResultIsCountedAsStale)
+{
+    RpcChannelConfig quick = FastConfig();
+    quick.result_timeout = 100ms;
+    a_ = std::make_unique<RpcChannel>(*bus_a_, quick, 1U);
+    std::promise<FrameHeader> received{};
+    ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start([&received](const Frame& frame) {
+        received.set_value(frame.header);
+    }),
+              ChannelStatus::kOk);
+
+    RequestStatus status{RequestStatus::kOk};
+    EXPECT_EQ(a_->SendRequestForResult(OfferService{"svc"}, status), ChannelStatus::kNoResult);
+    auto header = received.get_future();
+    ASSERT_EQ(header.wait_for(2s), std::future_status::ready);
+    EXPECT_EQ(b_->SendResult(header.get(), RequestStatus::kOk), ChannelStatus::kOk);
+    EXPECT_EQ(a_->Statistics().stale_results, 1U);
+}
+
+TEST_F(RpcChannelTest, LostResultIsResentAndHandledOnce)
+{
+    std::atomic<int> results_seen{0};
+    bus_b_->SetFaultHook([&results_seen](const std::uint8_t* data, std::size_t size) {
+        if (KindOfFrame(data, size) == FrameKind::kRequestResult && results_seen.fetch_add(1) == 0)
+        {
+            return LoopbackBus::Fault::kDrop;
+        }
+        return LoopbackBus::Fault::kDuplicate;
+    });
+    ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start(Answering(b_, RequestStatus::kOk)), ChannelStatus::kOk);
+
+    RequestStatus status{RequestStatus::kFailed};
+    EXPECT_EQ(a_->SendRequestForResult(OfferService{"svc"}, status), ChannelStatus::kOk);
+    EXPECT_EQ(status, RequestStatus::kOk);
+    EXPECT_EQ(b_->Statistics().retries, 1U);
+    std::this_thread::sleep_for(100ms);
+    // Duplicates of the result are dropped by the deduplication, not reported as stale.
+    EXPECT_GE(a_->Statistics().duplicates_dropped, 1U);
+    EXPECT_EQ(a_->Statistics().stale_results, 0U);
+}
+
+TEST_F(RpcChannelTest, ResultArrivesWhileLocalDispatcherIsBlocked)
+{
+    // The result must not wait behind the dispatch queue of the caller's channel.
+    std::mutex gate_mutex;
+    std::condition_variable gate_cv;
+    bool open_gate = false;
+    std::promise<void> a_dispatching{};
+    ASSERT_EQ(a_->Start([&](const Frame&) {
+        a_dispatching.set_value();
+        std::unique_lock<std::mutex> lock{gate_mutex};
+        gate_cv.wait(lock, [&open_gate]() {
+            return open_gate;
+        });
+    }),
+              ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start(Answering(b_, RequestStatus::kOk)), ChannelStatus::kOk);
+
+    ASSERT_EQ(b_->SendRequest(StopOfferService{"busy"}), ChannelStatus::kOk);
+    ASSERT_EQ(a_dispatching.get_future().wait_for(2s), std::future_status::ready);
+    RequestStatus status{RequestStatus::kFailed};
+    EXPECT_EQ(a_->SendRequestForResult(OfferService{"svc"}, status), ChannelStatus::kOk);
+    EXPECT_EQ(status, RequestStatus::kOk);
+    {
+        std::lock_guard<std::mutex> lock{gate_mutex};
+        open_gate = true;
+    }
+    gate_cv.notify_all();
+}
+
+TEST_F(RpcChannelTest, StopUnblocksCallerWaitingForResult)
+{
+    RpcChannelConfig slow = FastConfig();
+    slow.result_timeout = 10s;
+    a_ = std::make_unique<RpcChannel>(*bus_a_, slow, 1U);
+    StartBoth();
+    auto result = std::async(std::launch::async, [this]() {
+        RequestStatus status{RequestStatus::kOk};
+        return a_->SendRequestForResult(OfferService{"svc"}, status);
+    });
+    ASSERT_TRUE(recorder_b_.WaitFor(1U));
+    std::this_thread::sleep_for(50ms);
+    const auto start = std::chrono::steady_clock::now();
+    a_->Stop();
+    ASSERT_EQ(result.wait_for(2s), std::future_status::ready);
+    EXPECT_EQ(result.get(), ChannelStatus::kNotStarted);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, 1s);
+}
+
+TEST_F(RpcChannelTest, BothSidesWaitingForResultsDoNotDeadlock)
+{
+    // Each side requests from the other at the same time; each dispatcher sends a nested request back before it
+    // answers, like the destination gateway re-registering notifications while handling ProvideService.
+    const auto dispatcher = [](std::unique_ptr<RpcChannel>& self) {
+        return [&self](const Frame& frame) {
+            if (std::holds_alternative<ProvideService>(frame.body))
+            {
+                EXPECT_EQ(self->SendRequest(RegisterNotification{{"svc", WireElementKind::kEvent, "e"}}),
+                          ChannelStatus::kOk);
+                EXPECT_EQ(self->SendResult(frame.header, RequestStatus::kOk), ChannelStatus::kOk);
+            }
+        };
+    };
+    ASSERT_EQ(a_->Start(dispatcher(a_)), ChannelStatus::kOk);
+    ASSERT_EQ(b_->Start(dispatcher(b_)), ChannelStatus::kOk);
+
+    constexpr int kRounds{20};
+    const auto provide_many = [](RpcChannel& channel) {
+        int ok{0};
+        for (int i = 0; i < kRounds; ++i)
+        {
+            RequestStatus status{RequestStatus::kFailed};
+            if ((channel.SendRequestForResult(ProvideService{"svc", {}}, status) == ChannelStatus::kOk) &&
+                (status == RequestStatus::kOk))
+            {
+                ++ok;
+            }
+        }
+        return ok;
+    };
+    auto from_a = std::async(std::launch::async, [&]() {
+        return provide_many(*a_);
+    });
+    auto from_b = std::async(std::launch::async, [&]() {
+        return provide_many(*b_);
+    });
+    // A deadlock fails here instead of hanging the test.
+    ASSERT_EQ(from_a.wait_for(5s), std::future_status::ready);
+    ASSERT_EQ(from_b.wait_for(5s), std::future_status::ready);
+    EXPECT_EQ(from_a.get(), kRounds);
+    EXPECT_EQ(from_b.get(), kRounds);
 }
 
 TEST(RpcChannelSessionTest, GeneratedSessionIdsAreNonZeroAndDistinct)

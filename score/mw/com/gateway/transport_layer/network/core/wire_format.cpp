@@ -289,6 +289,14 @@ struct BodyWriter
         return true;
     }
 
+    bool operator()(const RequestResult& body) const
+    {
+        writer.U64(body.request_session);
+        writer.U32(body.request_sequence);
+        writer.U8(static_cast<std::uint8_t>(body.status));
+        return true;
+    }
+
   private:
     bool Instance(const std::string& instance) const
     {
@@ -335,7 +343,12 @@ DecodeError ReadInstanceBody(Reader& reader, FrameBody& body)
     return DecodeError::kNone;
 }
 
-DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, FrameBody& body)
+bool IsValidRequestStatus(std::uint8_t value) noexcept
+{
+    return value <= static_cast<std::uint8_t>(RequestStatus::kFailed);
+}
+
+DecodeError ReadBody(FrameKind kind, Reader& reader, FrameBody& body)
 {
     switch (kind)
     {
@@ -347,10 +360,10 @@ DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, Frame
             {
                 return DecodeError::kTruncated;
             }
-            // Smallest encoding of one EventMeta: name length (u16), size (u64), alignment (u64) and, since
-            // version 2, type_id length (u16). Checked before reserving, so count cannot force a large allocation.
-            const std::size_t min_event_size{(version >= 2U) ? 20U : 18U};
-            if ((static_cast<std::size_t>(count) * min_event_size) > reader.Remaining())
+            // Smallest encoding of one EventMeta: name length (u16), size (u64), alignment (u64), type_id length
+            // (u16). Checked before reserving, so count cannot force a large allocation.
+            constexpr std::size_t kMinEventSize{20U};
+            if ((static_cast<std::size_t>(count) * kMinEventSize) > reader.Remaining())
             {
                 return DecodeError::kTruncated;
             }
@@ -358,11 +371,8 @@ DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, Frame
             for (std::uint16_t i = 0U; i < count; ++i)
             {
                 EventMeta event{};
-                if (!reader.Str(event.name) || !reader.U64(event.size) || !reader.U64(event.alignment))
-                {
-                    return DecodeError::kTruncated;
-                }
-                if ((version >= 2U) && !reader.Str(event.type_id))
+                if (!reader.Str(event.name) || !reader.U64(event.size) || !reader.U64(event.alignment) ||
+                    !reader.Str(event.type_id))
                 {
                     return DecodeError::kTruncated;
                 }
@@ -401,6 +411,22 @@ DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, Frame
             body = value;
             return DecodeError::kNone;
         }
+        case FrameKind::kRequestResult:
+        {
+            RequestResult value{};
+            std::uint8_t status{0U};
+            if (!reader.U64(value.request_session) || !reader.U32(value.request_sequence) || !reader.U8(status))
+            {
+                return DecodeError::kTruncated;
+            }
+            if (!IsValidRequestStatus(status))
+            {
+                return DecodeError::kBadRequestStatus;
+            }
+            value.status = static_cast<RequestStatus>(status);
+            body = value;
+            return DecodeError::kNone;
+        }
         default:
             return DecodeError::kUnknownKind;
     }
@@ -409,7 +435,7 @@ DecodeError ReadBody(FrameKind kind, std::uint8_t version, Reader& reader, Frame
 bool IsKnownKind(std::uint8_t value) noexcept
 {
     return (value >= static_cast<std::uint8_t>(FrameKind::kProvideService)) &&
-           (value <= static_cast<std::uint8_t>(FrameKind::kAck));
+           (value <= static_cast<std::uint8_t>(FrameKind::kRequestResult));
 }
 
 }  // namespace
@@ -429,6 +455,7 @@ bool RequiresAck(FrameKind kind) noexcept
         case FrameKind::kStopOfferService:
         case FrameKind::kRegisterNotification:
         case FrameKind::kUnregisterNotification:
+        case FrameKind::kRequestResult:
             return true;
         case FrameKind::kUpdateNotification:
         case FrameKind::kEventSample:
@@ -507,7 +534,7 @@ DecodeResult Decode(const std::uint8_t* data, std::size_t size)
         result.error = DecodeError::kBadMagic;
         return result;
     }
-    if ((version < kMinWireVersion) || (version > kWireVersion))
+    if (version != kWireVersion)
     {
         result.error = DecodeError::kUnsupportedVersion;
         return result;
@@ -519,7 +546,7 @@ DecodeResult Decode(const std::uint8_t* data, std::size_t size)
     }
     frame.header.kind = static_cast<FrameKind>(kind);
 
-    const auto body_error = ReadBody(frame.header.kind, version, reader, frame.body);
+    const auto body_error = ReadBody(frame.header.kind, reader, frame.body);
     if (body_error != DecodeError::kNone)
     {
         result.error = body_error;
@@ -550,6 +577,8 @@ const char* ToString(DecodeError error) noexcept
             return "unknown frame kind";
         case DecodeError::kBadElementKind:
             return "bad service element kind";
+        case DecodeError::kBadRequestStatus:
+            return "bad request status";
         case DecodeError::kTrailingBytes:
             return "trailing bytes after frame body";
         default:
@@ -571,6 +600,21 @@ const char* ToString(EncodeError error) noexcept
             return "payload exceeds 4 GiB";
         default:
             return "unknown encode error";
+    }
+}
+
+const char* ToString(RequestStatus status) noexcept
+{
+    switch (status)
+    {
+        case RequestStatus::kOk:
+            return "ok";
+        case RequestStatus::kRejected:
+            return "rejected";
+        case RequestStatus::kFailed:
+            return "failed";
+        default:
+            return "unknown request status";
     }
 }
 

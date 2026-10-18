@@ -36,12 +36,13 @@ Skeleton writes them into its own shared memory.
 
 * **`core/`** — middleware- and mw::com-independent:
   * `wire_format` — versioned little-endian frames: ProvideService (instance + event name/size/alignment/type id),
-    OfferService, StopOfferService, (Un)RegisterNotification, UpdateNotification, EventSample, Ack. Version 2 added
-    the type id; version 1 frames are still decoded.
+    OfferService, StopOfferService, (Un)RegisterNotification, UpdateNotification, EventSample, Ack, RequestResult
+    (request session + sequence + status ok/rejected/failed). The protocol is pre-release: only the current version
+    (3) is decoded.
   * `type_id_check` — compares the type id an event was provided with against the local configuration.
   * `rpc_channel` — requests are acked on reception and resent until acked; the receiver drops resends per peer
-    session; inbound frames are dispatched in order on a dedicated thread. Same semantics as the sample hypervisor
-    transport: an ack confirms delivery, not the result of the remote `GatewayCore` call.
+    session; inbound frames are dispatched in order on a dedicated thread. An ack confirms delivery only (it is sent
+    before dispatch). The outcome is reported by a separate RequestResult frame, see below.
   * `message_bus` — the only thing a middleware has to provide: point-to-point frames between two inboxes.
 * **`network_transport`** — maps `Transport` calls to frames and inbound frames to `GatewayCore` calls, including
   `ForwardSampleData` → `GatewayCore::ReceiveSampleData`. No middleware dependency.
@@ -54,6 +55,23 @@ The gateway side of the copying path lives in `GatewayApplication`:
 * destination: `GatewayApplication::ReceiveSampleData` checks the size against the skeleton event's data type,
   `Allocate()`s, copies and `Send()`s (which notifies local consumers).
 
+## Request results
+
+`ProvideService` and `OfferService` return what the destination did with the request, not only that it arrived:
+
+* The destination sends a RequestResult after handling the request: `ok`; `rejected` (permanent: type id check,
+  invalid or non-whitelisted instance specifier); `failed` (its `GatewayCore` returned an error). The other requests
+  keep ack-only semantics.
+* The source waits for it up to `rpc.result-timeout-ms` after the ack (default 5000 ms, at least twice
+  `ack-timeout-ms * max-attempts`) and returns `TransportErrorc::kRejectedByPeer` for `rejected` and
+  `kPeerRequestFailed` for `failed` or a missing result. `GatewayApplication::PropagateService` logs a rejection and
+  keeps the proxy (no retry until the service is found again); a transient failure erases the proxy as before, so the
+  next discovery retries.
+* The RequestResult is acked, resent and deduplicated like a request, but completed on the receive thread like an
+  Ack, never through the dispatch queue. A waiting caller therefore never depends on its own dispatch thread, and
+  `GatewayApplication` does not hold its mutex while waiting, so two gateways providing services to each other at
+  the same time cannot block each other. A result that arrives too late is counted (`stale_results`) and dropped.
+
 ## Constraints
 
 * **Binary sample layout.** Samples are copied as the binary representation of the C++ data type (LoLa's in-memory
@@ -63,8 +81,9 @@ The gateway side of the copying path lives in `GatewayApplication`:
   same-size layout change (renamed or reordered members). Configure a type id per event in `type-check.type-ids`
   (an opaque string, e.g. `"DriveMode@1.2"` or a hash of the generated type definition) on both gateways. A mismatch
   always keeps the destination from providing the service and is logged there (`TypeIdRejections()`); a missing id is
-  logged and accepted with `"policy": "warn"` (default) and rejected with `"strict"`. The source only receives the
-  delivery Ack, so it is not told about a rejection.
+  rejected with `"policy": "strict"` (default) and only logged and accepted with `"warn"`, which is meant for
+  development: a size change then aborts the destination's typed consumers and a same-size change goes unnoticed. The
+  transport logs a warning at setup when `warn` is active. Rejections are reported to the source.
 * **Events only.** Fields and methods are rejected (`kNotSupported`), like the rest of the gateway today.
 * **zenoh-pico frame size.** zenoh-pico's default build reassembles messages up to `FRAG_MAX_SIZE = 4096` bytes. Build
   it with a larger `FRAG_MAX_SIZE` (verified here with 4 MiB) and set `max-frame-size` accordingly; `Publish()` rejects
@@ -102,9 +121,11 @@ not guess module versions.
 
 | What | How | Result |
 |---|---|---|
-| Wire format incl. v1 compatibility and type ids, type id check, RpcChannel (33 tests: lost request/ack, duplicates, late peer, nested request while caller waits, full dispatch queue, peer restart, stop from the dispatcher and restart, 8 concurrent senders) | `test/standalone` CMake harness, `-Werror -Wconversion -Wsign-conversion -Wshadow` | pass; ThreadSanitizer 20× repeat clean; ASan+UBSan clean |
+| Wire format incl. RequestResult and version check, type id check, RpcChannel (44 tests: lost request/ack/result, duplicates, late peer, nested request while caller waits, result while the local dispatcher is blocked, both sides waiting for results, result timeout, full dispatch queue, peer restart, stop from the dispatcher and restart, 8 concurrent senders) | `test/standalone` CMake harness, `-Werror -Wconversion -Wsign-conversion -Wshadow` | pass; ThreadSanitizer 10× repeat clean |
+| `network_transport_test` (18 tests incl. rejected/failed/timed-out results and two transports providing to each other concurrently), `transport_error_test` | linked against the real mw::com `InstanceSpecifier` and baselibs `result`, with a logging stub | pass; ThreadSanitizer 20× repeat clean |
 | ZenohPicoBus, CycloneDdsBus against the real libraries, two processes, both start orders: ProvideService with type ids → nested RegisterNotification → 2000 × 256 B samples → 1 MiB sample → 200 request round trips → StopOffer | `test/standalone/run_two_process.py` | pass on both; 0 lost, 0 reordered, 0 corrupt; also clean under ASan+UBSan |
-| `NetworkTransport`, config parser, `GatewayApplication` changes, `TransportFactory` with both flags, `network_transport_test.cpp`, new `gateway_application_test.cpp` cases | `g++ -fsyntax-only` against the real communication + baselibs headers, strict warnings | compile clean. **Not executed:** linking the mw::com runtime needs the Bazel build |
+| Config parser (27 tests) | linked against baselibs `json` | pass |
+| `GatewayApplication` changes, `TransportFactory` with both flags, `gateway_application_test.cpp` | `g++ -fsyntax-only` against the real communication + baselibs headers, strict warnings | compile clean. **Not executed:** linking the mw::com runtime needs the Bazel build |
 
 Request round trip on localhost (2 vCPU container, 200 probes): p50 ≈ 45–70 µs, p99 ≈ 90–300 µs, max ≈ 2.4–3.6 ms.
 This is loopback only, not an in-vehicle network figure.

@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 namespace score::mw::com::gateway::network
 {
@@ -33,10 +34,17 @@ namespace score::mw::com::gateway::network
 /// in arrival order on RpcChannel's dispatch thread. The middleware is chosen by the IMessageBus passed in
 /// (ZenohPicoBus, CycloneDdsBus), see TransportFactory ids "zenoh_pico" and "cyclone_dds".
 ///
+/// ProvideService and OfferService wait for the destination's RequestResult (RpcChannelConfig::result_timeout) after
+/// the delivery Ack and return:
+/// - TransportErrorc::kRejectedByPeer: permanent, the destination's configuration does not allow the service (type id
+///   check, invalid or non-whitelisted instance specifier);
+/// - TransportErrorc::kPeerRequestFailed: the destination's GatewayCore failed, or no result arrived in time.
+/// The caller must not hold a lock that the local dispatch thread (GatewayCore calls for inbound frames) may need:
+/// the peer may be waiting the same way for a request that this gateway dispatches.
+///
 /// Type ids (TypeIdConfig): ProvideService carries the configured type id of each event. The destination compares
-/// them with its own configuration and does not provide the service locally if one event fails the check
-/// (TypeIdRejections() counts these); the source only sees the delivery Ack, so the reason is logged at the
-/// destination.
+/// them with its own configuration and rejects the service if one event fails the check (TypeIdRejections() counts
+/// these; the reason is logged at the destination).
 ///
 /// Received samples are pushed into GatewayCore::ReceiveSampleData.
 class NetworkTransport final : public Transport
@@ -78,12 +86,15 @@ class NetworkTransport final : public Transport
 
     RpcChannelStatistics Statistics() const;
 
-    /// \brief Number of ProvideService requests not provided locally because of the type id check.
+    /// \brief Number of ProvideService requests rejected because of the type id check.
     std::uint64_t TypeIdRejections() const noexcept;
 
   private:
     void Dispatch(const Frame& frame);
     bool CheckTypeIds(const network::ProvideService& request);
+    RequestStatus HandleProvideService(const network::ProvideService& request);
+    RequestStatus HandleOfferService(const network::OfferService& request);
+    void ReportResult(const FrameHeader& request, RequestStatus status, std::string_view what);
 
     GatewayCore& gateway_core_;
     const TypeIdConfig type_ids_;

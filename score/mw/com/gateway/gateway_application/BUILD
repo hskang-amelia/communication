@@ -26,6 +26,7 @@ cc_library(
     features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":gateway_error",
+        "//score/mw/com/gateway/transport_layer:transport_error",
         "//score/mw/com/gateway/transport_layer:transport_factory",
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/mw/log",
@@ -89,6 +90,7 @@ cc_unit_test(
         ":gateway_application",
         ":gateway_error",
         "//score/mw/com/gateway/gateway_application/configuration:gateway_configuration",
+        "//score/mw/com/gateway/transport_layer:transport_error",
         "//score/mw/com/gateway/transport_layer:transport_mock",
         "//score/mw/com/impl:find_service_handle",
         "//score/mw/com/impl:find_service_handler",

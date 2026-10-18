@@ -99,10 +99,10 @@ void PutStr(std::vector<std::uint8_t>& out, const std::string& value)
     out.insert(out.end(), value.begin(), value.end());
 }
 
-TEST(WireFormatTest, DecodesVersion1ProvideServiceWithoutTypeIds)
+/// ProvideService with one event "speed", encoded by hand; with_type_id false leaves out the type id length.
+std::vector<std::uint8_t> HandEncodedProvideService(std::uint8_t version, bool with_type_id)
 {
-    // A version 1 peer: header + instance + count + (name, size, alignment) per event, no type id.
-    std::vector<std::uint8_t> bytes{0x53U, 0x47U, 1U, static_cast<std::uint8_t>(FrameKind::kProvideService)};
+    std::vector<std::uint8_t> bytes{0x53U, 0x47U, version, static_cast<std::uint8_t>(FrameKind::kProvideService)};
     PutU64(bytes, 11U);
     bytes.insert(bytes.end(), {5U, 0U, 0U, 0U});
     PutStr(bytes, "/vehicle/speed");
@@ -110,23 +110,64 @@ TEST(WireFormatTest, DecodesVersion1ProvideServiceWithoutTypeIds)
     PutStr(bytes, "speed");
     PutU64(bytes, 8U);
     PutU64(bytes, 8U);
-
-    const auto frame = DecodeOrFail(bytes);
-    EXPECT_EQ(frame.header.session, 11U);
-    EXPECT_EQ(frame.header.sequence, 5U);
-    const auto& out = std::get<ProvideService>(frame.body);
-    ASSERT_EQ(out.events.size(), 1U);
-    EXPECT_EQ(out.events[0].name, "speed");
-    EXPECT_EQ(out.events[0].size, 8U);
-    EXPECT_EQ(out.events[0].type_id, "");
+    if (with_type_id)
+    {
+        PutStr(bytes, "Speed@1");
+    }
+    return bytes;
 }
 
-TEST(WireFormatTest, Version1OfferServiceStillDecodes)
+TEST(WireFormatTest, DecodesOnlyTheCurrentVersion)
 {
-    auto bytes = EncodeOrFail(OfferService{"/vehicle/speed"});
-    bytes[2] = 1U;
-    const auto frame = DecodeOrFail(bytes);
-    EXPECT_EQ(std::get<OfferService>(frame.body).instance, "/vehicle/speed");
+    const auto current = HandEncodedProvideService(kWireVersion, true);
+    const auto frame = DecodeOrFail(current);
+    EXPECT_EQ(frame.header.session, 11U);
+    EXPECT_EQ(frame.header.sequence, 5U);
+    EXPECT_EQ(std::get<ProvideService>(frame.body).events.at(0U).type_id, "Speed@1");
+
+    for (std::uint8_t version = 1U; version < kWireVersion; ++version)
+    {
+        const auto older = HandEncodedProvideService(version, version >= 2U);
+        EXPECT_EQ(Decode(older.data(), older.size()).error, DecodeError::kUnsupportedVersion) << "version " << +version;
+    }
+}
+
+TEST(WireFormatTest, ProvideServiceEventWithoutTypeIdIsTruncated)
+{
+    const auto bytes = HandEncodedProvideService(kWireVersion, false);
+    EXPECT_EQ(Decode(bytes.data(), bytes.size()).error, DecodeError::kTruncated);
+}
+
+TEST(WireFormatTest, RequestResultRoundTrip)
+{
+    for (const auto status : {RequestStatus::kOk, RequestStatus::kRejected, RequestStatus::kFailed})
+    {
+        const auto bytes = EncodeOrFail(RequestResult{0x0102030405060708U, 0x0A0B0C0DU, status}, 3U, 4U);
+        // header + session u64 + sequence u32 + status u8
+        ASSERT_EQ(bytes.size(), kHeaderSize + 13U);
+        EXPECT_EQ(bytes[3], static_cast<std::uint8_t>(FrameKind::kRequestResult));
+        EXPECT_EQ(bytes[kHeaderSize], 0x08U);
+        EXPECT_EQ(bytes[kHeaderSize + 8U], 0x0DU);
+        EXPECT_EQ(bytes[kHeaderSize + 12U], static_cast<std::uint8_t>(status));
+
+        const auto frame = DecodeOrFail(bytes);
+        EXPECT_EQ(frame.header.kind, FrameKind::kRequestResult);
+        EXPECT_EQ(frame.header.session, 3U);
+        EXPECT_EQ(frame.header.sequence, 4U);
+        const auto& result = std::get<RequestResult>(frame.body);
+        EXPECT_EQ(result.request_session, 0x0102030405060708U);
+        EXPECT_EQ(result.request_sequence, 0x0A0B0C0DU);
+        EXPECT_EQ(result.status, status);
+    }
+}
+
+TEST(WireFormatTest, RequestResultWithUnknownStatusIsRejected)
+{
+    auto bytes = EncodeOrFail(RequestResult{1U, 2U, RequestStatus::kOk});
+    bytes.back() = 3U;
+    EXPECT_EQ(Decode(bytes.data(), bytes.size()).error, DecodeError::kBadRequestStatus);
+    bytes.pop_back();
+    EXPECT_EQ(Decode(bytes.data(), bytes.size()).error, DecodeError::kTruncated);
 }
 
 TEST(WireFormatTest, AllBodiesRoundTrip)
@@ -140,6 +181,7 @@ TEST(WireFormatTest, AllBodiesRoundTrip)
         UpdateNotification{{"i", WireElementKind::kEvent, "e"}},
         EventSample{"i", "e", {1U, 2U, 3U}},
         Ack{11U, 12U},
+        RequestResult{13U, 14U, RequestStatus::kRejected},
     };
     for (const auto& body : bodies)
     {
@@ -213,6 +255,8 @@ TEST(WireFormatTest, RejectsMalformedFrames)
     auto bad_version = bytes;
     bad_version[2] = static_cast<std::uint8_t>(kWireVersion + 1U);
     EXPECT_EQ(Decode(bad_version.data(), bad_version.size()).error, DecodeError::kUnsupportedVersion);
+    bad_version[2] = static_cast<std::uint8_t>(kWireVersion - 1U);
+    EXPECT_EQ(Decode(bad_version.data(), bad_version.size()).error, DecodeError::kUnsupportedVersion);
     bad_version[2] = 0U;
     EXPECT_EQ(Decode(bad_version.data(), bad_version.size()).error, DecodeError::kUnsupportedVersion);
 
@@ -257,6 +301,7 @@ TEST(WireFormatTest, AckRequirement)
     EXPECT_TRUE(RequiresAck(FrameKind::kStopOfferService));
     EXPECT_TRUE(RequiresAck(FrameKind::kRegisterNotification));
     EXPECT_TRUE(RequiresAck(FrameKind::kUnregisterNotification));
+    EXPECT_TRUE(RequiresAck(FrameKind::kRequestResult));
     EXPECT_FALSE(RequiresAck(FrameKind::kUpdateNotification));
     EXPECT_FALSE(RequiresAck(FrameKind::kEventSample));
     EXPECT_FALSE(RequiresAck(FrameKind::kAck));

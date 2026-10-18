@@ -93,6 +93,7 @@ cc_library(
         ":network_core",
         "//score/mw/com:types",
         "//score/mw/com/gateway/gateway_application:gateway_core",
+        "//score/mw/com/gateway/gateway_application:gateway_error",
         "//score/mw/com/gateway/transport_layer:transport",
         "//score/mw/com/gateway/transport_layer:transport_error",
         "//score/mw/com/impl:service_element_type",

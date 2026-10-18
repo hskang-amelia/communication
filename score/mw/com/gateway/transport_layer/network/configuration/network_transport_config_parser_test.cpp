@@ -54,7 +54,8 @@ TEST_F(NetworkTransportConfigParserFixture, ParseExampleZenohPicoJson)
 
     EXPECT_EQ(std::chrono::milliseconds{200}, config.rpc.ack_timeout);
     EXPECT_EQ(5U, config.rpc.max_attempts);
-    EXPECT_EQ(TypeIdPolicy::kWarn, config.type_check.policy);
+    EXPECT_EQ(std::chrono::milliseconds{5000}, config.rpc.result_timeout);
+    EXPECT_EQ(TypeIdPolicy::kStrict, config.type_check.policy);
     EXPECT_EQ("DriveMode@1.2", config.type_check.Find("/vehicle/drive_mode", "mode"));
     EXPECT_EQ("peer", config.zenoh_pico.mode);
     EXPECT_EQ("tcp/0.0.0.0:7447", config.zenoh_pico.listen);
@@ -69,6 +70,8 @@ TEST_F(NetworkTransportConfigParserFixture, ParseExampleCycloneDdsJson)
                                                     NetworkBackend::kCycloneDds);
 
     EXPECT_EQ(10U, config.rpc.max_attempts);
+    EXPECT_EQ(TypeIdPolicy::kStrict, config.type_check.policy);
+    EXPECT_EQ("DriveMode@1.2", config.type_check.Find("/vehicle/drive_mode", "mode"));
     EXPECT_EQ(0U, config.cyclone_dds.domain_id);
     EXPECT_EQ("score_gateway_hpc", config.cyclone_dds.local_topic);
     EXPECT_EQ("score_gateway_zonal_front", config.cyclone_dds.remote_topic);
@@ -97,7 +100,8 @@ TEST_F(NetworkTransportConfigParserFixture, ParseMinimalZenohPicoAppliesDefaults
     EXPECT_EQ(5U, config.rpc.max_attempts);
     EXPECT_EQ(256U, config.rpc.dedupe_window);
     EXPECT_EQ(1024U, config.rpc.max_dispatch_queue);
-    EXPECT_EQ(TypeIdPolicy::kWarn, config.type_check.policy);
+    EXPECT_EQ(std::chrono::milliseconds{5000}, config.rpc.result_timeout);
+    EXPECT_EQ(TypeIdPolicy::kStrict, config.type_check.policy);
     EXPECT_TRUE(config.type_check.type_ids.empty());
     EXPECT_EQ("peer", config.zenoh_pico.mode);
     EXPECT_EQ(std::chrono::milliseconds{30000}, config.zenoh_pico.open_timeout);
@@ -146,6 +150,49 @@ TEST_F(NetworkTransportConfigParserFixture, ParseSchemaBoundariesIsAccepted)
     EXPECT_EQ(1U, config.rpc.max_dispatch_queue);
     EXPECT_EQ(232U, config.cyclone_dds.domain_id);
     EXPECT_EQ(1, config.cyclone_dds.history_depth);
+}
+
+TEST_F(NetworkTransportConfigParserFixture, ParseWarnPolicyIsAccepted)
+{
+    auto j = R"({"type-check": {"policy": "warn"}, "cyclone-dds": {"local-topic": "a", "remote-topic": "b"}})"_json;
+    const auto config = ParseNetworkTransportConfig(std::move(j), NetworkBackend::kCycloneDds);
+    EXPECT_EQ(TypeIdPolicy::kWarn, config.type_check.policy);
+}
+
+TEST_F(NetworkTransportConfigParserFixture, ParseExplicitResultTimeout)
+{
+    auto j = R"(
+{
+  "rpc": {"ack-timeout-ms": 100, "max-attempts": 3, "result-timeout-ms": 300},
+  "cyclone-dds": {"local-topic": "a", "remote-topic": "b"}
+}
+)"_json;
+    const auto config = ParseNetworkTransportConfig(std::move(j), NetworkBackend::kCycloneDds);
+    EXPECT_EQ(std::chrono::milliseconds{300}, config.rpc.result_timeout);
+}
+
+TEST_F(NetworkTransportConfigParserFixture, ParseDefaultResultTimeoutCoversTwiceTheRetryBudget)
+{
+    // Given retry settings whose budget (4 s) exceeds half of the 5 s default
+    auto j = R"(
+{
+  "rpc": {"ack-timeout-ms": 400, "max-attempts": 10},
+  "cyclone-dds": {"local-topic": "a", "remote-topic": "b"}
+}
+)"_json;
+    const auto config = ParseNetworkTransportConfig(std::move(j), NetworkBackend::kCycloneDds);
+    EXPECT_EQ(std::chrono::milliseconds{8000}, config.rpc.result_timeout);
+}
+
+TEST_F(NetworkTransportConfigParserFixture, ParseResultTimeoutBelowRetryBudgetDies)
+{
+    auto j = R"(
+{
+  "rpc": {"ack-timeout-ms": 100, "max-attempts": 3, "result-timeout-ms": 299},
+  "cyclone-dds": {"local-topic": "a", "remote-topic": "b"}
+}
+)"_json;
+    EXPECT_DEATH(ParseNetworkTransportConfig(std::move(j), NetworkBackend::kCycloneDds), ".*");
 }
 
 TEST_F(NetworkTransportConfigParserFixture, ParseFromInvalidPathDies)

@@ -24,8 +24,10 @@ namespace score::mw::com::gateway::network
 enum class TypeIdPolicy : std::uint8_t
 {
     /// A missing type id (on either side) is logged and the event is accepted. A mismatch is always rejected.
+    /// For development only: a same-size layout change goes unnoticed and a size change aborts the destination's
+    /// typed consumers.
     kWarn = 0U,
-    /// Both sides must configure the same type id for every event, otherwise the service is rejected.
+    /// Both sides must configure the same type id for every event, otherwise the service is rejected. Default.
     kStrict = 1U,
 };
 
@@ -46,7 +48,7 @@ enum class TypeIdVerdict : std::uint8_t
 /// equality only.
 struct TypeIdConfig
 {
-    TypeIdPolicy policy{TypeIdPolicy::kWarn};
+    TypeIdPolicy policy{TypeIdPolicy::kStrict};
     /// instance specifier -> event name -> type id
     std::map<std::string, std::map<std::string, std::string>> type_ids{};
 

@@ -100,6 +100,7 @@ class GatewayApplication : public GatewayCore
     void OnServiceAvailabilityChanged(const std::string& specifier_str,
                                       std::vector<score::mw::com::HandleType> handles);
     void OnServiceUnavailable(const std::string& specifier_str);
+    /// \brief Sends ProvideService for the proxy of specifier_str. Must be called without holding mutex_.
     void PropagateService(const std::string& specifier_str);
 
     void RegisterEventReceiveHandlerCallback(score::mw::com::GenericSkeleton& skeleton,

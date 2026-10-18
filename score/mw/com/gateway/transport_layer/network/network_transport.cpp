@@ -12,6 +12,7 @@
  ********************************************************************************/
 #include "score/mw/com/gateway/transport_layer/network/network_transport.h"
 
+#include "score/mw/com/gateway/gateway_application/gateway_error.h"
 #include "score/mw/com/gateway/transport_layer/transport_error.h"
 #include "score/mw/log/logging.h"
 
@@ -43,8 +44,29 @@ score::Result<void> ToResult(ChannelStatus status)
             return score::MakeUnexpected(TransportErrorc::kSendFailure);
         case ChannelStatus::kTimeout:
             return score::MakeUnexpected(TransportErrorc::kTimeout);
+        case ChannelStatus::kNoResult:
+            return score::MakeUnexpected(TransportErrorc::kPeerRequestFailed, "no result from the peer");
         default:
             return score::MakeUnexpected(TransportErrorc::kSendFailure);
+    }
+}
+
+/// Result of a request that the peer answers with a RequestResult.
+score::Result<void> ToResult(ChannelStatus channel_status, RequestStatus request_status)
+{
+    if (channel_status != ChannelStatus::kOk)
+    {
+        return ToResult(channel_status);
+    }
+    switch (request_status)
+    {
+        case RequestStatus::kOk:
+            return {};
+        case RequestStatus::kRejected:
+            return score::MakeUnexpected(TransportErrorc::kRejectedByPeer);
+        case RequestStatus::kFailed:
+        default:
+            return score::MakeUnexpected(TransportErrorc::kPeerRequestFailed);
     }
 }
 
@@ -123,6 +145,19 @@ void LogIfFailed(const score::Result<void>& result, std::string_view what)
     }
 }
 
+/// Maps the GatewayCore result of a request to the status reported to the peer.
+RequestStatus ToRequestStatus(const score::Result<void>& result, std::string_view what)
+{
+    LogIfFailed(result, what);
+    if (result.has_value())
+    {
+        return RequestStatus::kOk;
+    }
+    // Not listed under expected-received-services: retrying cannot help.
+    return (result.error() == GatewayErrorc::kNonWhitelistedService) ? RequestStatus::kRejected
+                                                                     : RequestStatus::kFailed;
+}
+
 }  // namespace
 
 NetworkTransport::NetworkTransport(GatewayCore& gateway_core,
@@ -157,6 +192,12 @@ score::Result<void> NetworkTransport::Setup()
             << "NetworkTransport: setup failed:" << std::string_view{ToString(status)};
         return score::MakeUnexpected(TransportErrorc::kServerSetupFailed);
     }
+    if (type_ids_.policy == TypeIdPolicy::kWarn)
+    {
+        score::mw::log::LogWarn(kLogContext)
+            << "NetworkTransport: type-check policy \"warn\": events without a type id are accepted. Use for "
+               "development only; a layout change of such an event is not detected.";
+    }
     return {};
 }
 
@@ -180,12 +221,17 @@ score::Result<void> NetworkTransport::ProvideService(score::mw::com::InstanceSpe
                                            static_cast<std::uint64_t>(element.data_type_meta_info.alignment),
                                            std::move(type_id)});
     }
-    return ToResult(channel_.SendRequest(request));
+    RequestStatus status{RequestStatus::kOk};
+    const auto channel_status = channel_.SendRequestForResult(request, status);
+    return ToResult(channel_status, status);
 }
 
 score::Result<void> NetworkTransport::OfferService(score::mw::com::InstanceSpecifier service_instance_specifier)
 {
-    return ToResult(channel_.SendRequest(network::OfferService{ToWireInstance(service_instance_specifier)}));
+    RequestStatus status{RequestStatus::kOk};
+    const auto channel_status =
+        channel_.SendRequestForResult(network::OfferService{ToWireInstance(service_instance_specifier)}, status);
+    return ToResult(channel_status, status);
 }
 
 score::Result<void> NetworkTransport::StopOfferService(score::mw::com::InstanceSpecifier service_instance_specifier)
@@ -276,34 +322,60 @@ bool NetworkTransport::CheckTypeIds(const network::ProvideService& request)
     return accepted;
 }
 
+RequestStatus NetworkTransport::HandleProvideService(const network::ProvideService& request)
+{
+    if (!CheckTypeIds(request))
+    {
+        type_id_rejections_.fetch_add(1U);
+        return RequestStatus::kRejected;
+    }
+    // Stays kRejected if the instance specifier is invalid.
+    RequestStatus status{RequestStatus::kRejected};
+    WithInstance(request.instance, "ProvideService", [this, &request, &status](score::mw::com::InstanceSpecifier spec) {
+        // EventInfo::name is a string_view into the frame, which outlives this call.
+        std::vector<score::mw::com::EventInfo> elements{};
+        elements.reserve(request.events.size());
+        for (const auto& event : request.events)
+        {
+            elements.push_back(score::mw::com::impl::EventInfo{
+                std::string_view{event.name},
+                score::mw::com::impl::DataTypeMetaInfo{static_cast<std::size_t>(event.size),
+                                                       static_cast<std::size_t>(event.alignment)}});
+        }
+        status = ToRequestStatus(gateway_core_.ProvideService(std::move(spec), std::move(elements)), "ProvideService");
+    });
+    return status;
+}
+
+RequestStatus NetworkTransport::HandleOfferService(const network::OfferService& request)
+{
+    RequestStatus status{RequestStatus::kRejected};
+    WithInstance(request.instance, "OfferService", [this, &status](score::mw::com::InstanceSpecifier spec) {
+        status = ToRequestStatus(gateway_core_.OfferService(std::move(spec)), "OfferService");
+    });
+    return status;
+}
+
+void NetworkTransport::ReportResult(const FrameHeader& request, RequestStatus status, std::string_view what)
+{
+    const auto channel_status = channel_.SendResult(request, status);
+    if (channel_status != ChannelStatus::kOk)
+    {
+        // The source's wait for this result ends with a timeout.
+        score::mw::log::LogWarn(kLogContext) << "NetworkTransport: could not report the result of" << what
+                                             << "to the peer:" << std::string_view{ToString(channel_status)};
+    }
+}
+
 void NetworkTransport::Dispatch(const Frame& frame)
 {
     if (const auto* provide = std::get_if<network::ProvideService>(&frame.body))
     {
-        if (!CheckTypeIds(*provide))
-        {
-            type_id_rejections_.fetch_add(1U);
-            return;
-        }
-        WithInstance(provide->instance, "ProvideService", [this, provide](score::mw::com::InstanceSpecifier spec) {
-            // EventInfo::name is a string_view into the frame, which outlives this call.
-            std::vector<score::mw::com::EventInfo> elements{};
-            elements.reserve(provide->events.size());
-            for (const auto& event : provide->events)
-            {
-                elements.push_back(score::mw::com::impl::EventInfo{
-                    std::string_view{event.name},
-                    score::mw::com::impl::DataTypeMetaInfo{static_cast<std::size_t>(event.size),
-                                                           static_cast<std::size_t>(event.alignment)}});
-            }
-            LogIfFailed(gateway_core_.ProvideService(std::move(spec), std::move(elements)), "ProvideService");
-        });
+        ReportResult(frame.header, HandleProvideService(*provide), "ProvideService");
     }
     else if (const auto* offer = std::get_if<network::OfferService>(&frame.body))
     {
-        WithInstance(offer->instance, "OfferService", [this](score::mw::com::InstanceSpecifier spec) {
-            LogIfFailed(gateway_core_.OfferService(std::move(spec)), "OfferService");
-        });
+        ReportResult(frame.header, HandleOfferService(*offer), "OfferService");
     }
     else if (const auto* stop = std::get_if<network::StopOfferService>(&frame.body))
     {

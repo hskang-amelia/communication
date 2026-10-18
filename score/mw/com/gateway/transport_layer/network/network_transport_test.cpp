@@ -15,6 +15,7 @@
 #include "score/mw/com/gateway/gateway_application/gateway_core_mock.h"
 #include "score/mw/com/gateway/gateway_application/gateway_error.h"
 #include "score/mw/com/gateway/transport_layer/network/core/loopback_bus.h"
+#include "score/mw/com/gateway/transport_layer/transport_error.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -22,6 +23,7 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,7 @@ RpcChannelConfig FastConfig()
     RpcChannelConfig config{};
     config.ack_timeout = 50ms;
     config.max_attempts = 4U;
+    config.result_timeout = 1s;
     return config;
 }
 
@@ -71,30 +74,17 @@ class NetworkTransportTest : public ::testing::Test
     }
 
     /// Replaces both transports with ones that use the given type id configurations.
-    void Recreate(TypeIdConfig source_ids, TypeIdConfig destination_ids)
+    void Recreate(TypeIdConfig source_ids, TypeIdConfig destination_ids, RpcChannelConfig config = FastConfig())
     {
         source_.reset();
         destination_.reset();
         auto buses = LoopbackBus::CreatePair();
-        source_ = std::make_unique<NetworkTransport>(
-            source_core_, std::move(buses.first), FastConfig(), std::move(source_ids));
+        source_ =
+            std::make_unique<NetworkTransport>(source_core_, std::move(buses.first), config, std::move(source_ids));
         destination_ = std::make_unique<NetworkTransport>(
-            destination_core_, std::move(buses.second), FastConfig(), std::move(destination_ids));
+            destination_core_, std::move(buses.second), config, std::move(destination_ids));
         ASSERT_TRUE(source_->Setup().has_value());
         ASSERT_TRUE(destination_->Setup().has_value());
-    }
-
-    /// Requests are dispatched in order: once this OfferService has reached the destination core, every request
-    /// sent before it has been dispatched too.
-    void SendOfferAndWait()
-    {
-        std::promise<void> offered{};
-        EXPECT_CALL(destination_core_, OfferService(_)).WillOnce(Invoke([&offered](auto) {
-            offered.set_value();
-            return score::Result<void>{};
-        }));
-        ASSERT_TRUE(source_->OfferService(Specifier()).has_value());
-        ASSERT_EQ(offered.get_future().wait_for(2s), std::future_status::ready);
     }
 
     NiceMock<GatewayCoreMock> source_core_;
@@ -110,6 +100,10 @@ TEST_F(NetworkTransportTest, IsACopyingTransport)
 
 TEST_F(NetworkTransportTest, ProvideServiceReachesRemoteCoreWithEventMetadata)
 {
+    TypeIdConfig ids{};
+    ids.type_ids[kInstance]["speed"] = "Speed@1";
+    ids.type_ids[kInstance]["status"] = "Status@1";
+    Recreate(ids, ids);
     std::promise<void> called{};
     EXPECT_CALL(destination_core_, ProvideService(_, _))
         .WillOnce(Invoke(
@@ -221,16 +215,111 @@ TEST_F(NetworkTransportTest, NestedRequestFromRemoteCoreDoesNotDeadlock)
     EXPECT_EQ(registered.get_future().wait_for(2s), std::future_status::ready);
 }
 
-TEST_F(NetworkTransportTest, RemoteCoreErrorIsOnlyLoggedRemotely)
+TEST_F(NetworkTransportTest, RemoteCoreErrorIsReportedAsTransientFailure)
 {
-    // Ack semantics (same as the sample hypervisor transport): the ack confirms delivery, not the remote result.
-    std::promise<void> called{};
-    EXPECT_CALL(destination_core_, OfferService(_)).WillOnce(Invoke([&called](auto) {
-        called.set_value();
+    EXPECT_CALL(destination_core_, OfferService(_)).WillOnce(Invoke([](auto) {
         return score::Result<void>{score::MakeUnexpected(GatewayErrorc::kSkeletonOfferFailed)};
     }));
-    EXPECT_TRUE(source_->OfferService(Specifier()).has_value());
-    EXPECT_EQ(called.get_future().wait_for(2s), std::future_status::ready);
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).WillOnce(Invoke([](auto, auto) {
+        return score::Result<void>{score::MakeUnexpected(GatewayErrorc::kSkeletonCreationFailed)};
+    }));
+    const auto offer = source_->OfferService(Specifier());
+    ASSERT_FALSE(offer.has_value());
+    EXPECT_EQ(offer.error(), TransportErrorc::kPeerRequestFailed);
+    const auto provide = source_->ProvideService(Specifier(), {});
+    ASSERT_FALSE(provide.has_value());
+    EXPECT_EQ(provide.error(), TransportErrorc::kPeerRequestFailed);
+}
+
+TEST_F(NetworkTransportTest, NonWhitelistedServiceIsReportedAsRejection)
+{
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).WillOnce(Invoke([](auto, auto) {
+        return score::Result<void>{score::MakeUnexpected(GatewayErrorc::kNonWhitelistedService)};
+    }));
+    const auto result = source_->ProvideService(Specifier(), {});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), TransportErrorc::kRejectedByPeer);
+}
+
+TEST_F(NetworkTransportTest, NoResultInTimeIsATransientFailure)
+{
+    RpcChannelConfig config = FastConfig();
+    config.result_timeout = 300ms;
+    Recreate({}, {}, config);
+    // The destination handles the request for longer than the source waits.
+    std::promise<void> release{};
+    auto released = release.get_future().share();
+    EXPECT_CALL(destination_core_, OfferService(_)).WillOnce(Invoke([released](auto) {
+        static_cast<void>(released.wait_for(5s));
+        return score::Result<void>{};
+    }));
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto result = source_->OfferService(Specifier());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), TransportErrorc::kPeerRequestFailed);
+    EXPECT_GE(std::chrono::steady_clock::now() - start, config.result_timeout);
+
+    release.set_value();
+    // The late result is dropped by the source.
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while ((source_->Statistics().stale_results == 0U) && (std::chrono::steady_clock::now() < deadline))
+    {
+        std::this_thread::sleep_for(10ms);
+    }
+    EXPECT_EQ(source_->Statistics().stale_results, 1U);
+}
+
+TEST_F(NetworkTransportTest, GatewaysProvidingToEachOtherConcurrentlyDoNotDeadlock)
+{
+    // Both gateways forward a service to the other at the same time. Each GatewayCore handles ProvideService under
+    // its application lock (which the caller does not hold while waiting) and registers a notification back, like
+    // GatewayApplication re-registering active subscriptions.
+    std::mutex source_app_mutex{};
+    std::mutex destination_app_mutex{};
+    const auto handler = [](std::mutex& app_mutex, std::unique_ptr<NetworkTransport>& self) {
+        return [&app_mutex, &self](auto, auto) {
+            std::lock_guard<std::mutex> lock{app_mutex};
+            return self->RegisterUpdateNotification(Specifier(), impl::ServiceElementType::EVENT, "speed");
+        };
+    };
+    constexpr int kRounds{10};
+    EXPECT_CALL(source_core_, ProvideService(_, _))
+        .Times(kRounds)
+        .WillRepeatedly(Invoke(handler(source_app_mutex, source_)));
+    EXPECT_CALL(destination_core_, ProvideService(_, _))
+        .Times(kRounds)
+        .WillRepeatedly(Invoke(handler(destination_app_mutex, destination_)));
+    ON_CALL(source_core_, RegisterUpdateNotification(_, _, _))
+        .WillByDefault(Invoke([&source_app_mutex](auto, auto, auto) {
+            std::lock_guard<std::mutex> lock{source_app_mutex};
+            return score::Result<void>{};
+        }));
+    ON_CALL(destination_core_, RegisterUpdateNotification(_, _, _))
+        .WillByDefault(Invoke([&destination_app_mutex](auto, auto, auto) {
+            std::lock_guard<std::mutex> lock{destination_app_mutex};
+            return score::Result<void>{};
+        }));
+
+    const auto provide_many = [](NetworkTransport& transport) {
+        int ok{0};
+        for (int i = 0; i < kRounds; ++i)
+        {
+            ok += transport.ProvideService(Specifier(), {}).has_value() ? 1 : 0;
+        }
+        return ok;
+    };
+    auto from_source = std::async(std::launch::async, [&]() {
+        return provide_many(*source_);
+    });
+    auto from_destination = std::async(std::launch::async, [&]() {
+        return provide_many(*destination_);
+    });
+    // A deadlock fails here instead of hanging the test.
+    ASSERT_EQ(from_source.wait_for(10s), std::future_status::ready);
+    ASSERT_EQ(from_destination.wait_for(10s), std::future_status::ready);
+    EXPECT_EQ(from_source.get(), kRounds);
+    EXPECT_EQ(from_destination.get(), kRounds);
 }
 
 TEST_F(NetworkTransportTest, RequestFailsWhenPeerIsDown)
@@ -287,9 +376,10 @@ TEST_F(NetworkTransportTest, MismatchedTypeIdRejectsTheService)
 {
     Recreate(IdsFor("Speed@2"), IdsFor("Speed@1"));
     EXPECT_CALL(destination_core_, ProvideService(_, _)).Times(0);
-    // The request itself is delivered (and acked); the destination does not provide the service.
-    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
-    SendOfferAndWait();
+    // The destination does not provide the service and reports the rejection to the source.
+    const auto result = source_->ProvideService(Specifier(), SpeedEvent());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), TransportErrorc::kRejectedByPeer);
     EXPECT_EQ(destination_->TypeIdRejections(), 1U);
 }
 
@@ -297,8 +387,18 @@ TEST_F(NetworkTransportTest, StrictPolicyRejectsAMissingTypeId)
 {
     Recreate(IdsFor(""), IdsFor("Speed@1", TypeIdPolicy::kStrict));
     EXPECT_CALL(destination_core_, ProvideService(_, _)).Times(0);
-    ASSERT_TRUE(source_->ProvideService(Specifier(), SpeedEvent()).has_value());
-    SendOfferAndWait();
+    const auto result = source_->ProvideService(Specifier(), SpeedEvent());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), TransportErrorc::kRejectedByPeer);
+    EXPECT_EQ(destination_->TypeIdRejections(), 1U);
+}
+
+TEST_F(NetworkTransportTest, DefaultConfigurationRejectsEventsWithoutTypeIds)
+{
+    EXPECT_CALL(destination_core_, ProvideService(_, _)).Times(0);
+    const auto result = source_->ProvideService(Specifier(), SpeedEvent());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), TransportErrorc::kRejectedByPeer);
     EXPECT_EQ(destination_->TypeIdRejections(), 1U);
 }
 

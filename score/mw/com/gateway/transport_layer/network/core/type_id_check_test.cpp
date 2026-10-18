@@ -46,6 +46,11 @@ TEST(TypeIdCheckTest, MissingIdsDependOnPolicy)
     }
 }
 
+TEST(TypeIdCheckTest, DefaultPolicyIsStrict)
+{
+    EXPECT_EQ(TypeIdConfig{}.policy, TypeIdPolicy::kStrict);
+}
+
 TEST(TypeIdCheckTest, FindReturnsEmptyForUnknownEntries)
 {
     TypeIdConfig config{};

@@ -33,6 +33,10 @@ enum class TransportErrorc : score::result::ErrorCode
     kNotSupported,
     kSendFailure,
     kReceiveFailure,
+    /// The peer received the request and rejected it permanently (e.g. its configuration does not allow it).
+    kRejectedByPeer,
+    /// The peer received the request but did not complete it (its handler failed or no result arrived in time).
+    kPeerRequestFailed,
 };
 
 score::result::Error MakeError(const TransportErrorc code, const std::string_view message = "");
@@ -66,6 +70,10 @@ class TransportErrorDomain final : public score::result::ErrorDomain
                 return "Failed to send message.";
             case static_cast<score::result::ErrorCode>(TransportErrorc::kReceiveFailure):
                 return "Failed to receive message.";
+            case static_cast<score::result::ErrorCode>(TransportErrorc::kRejectedByPeer):
+                return "Request rejected by the peer.";
+            case static_cast<score::result::ErrorCode>(TransportErrorc::kPeerRequestFailed):
+                return "Request not completed by the peer.";
             default:
                 return "unknown transport error";
         }

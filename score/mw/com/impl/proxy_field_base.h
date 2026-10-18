@@ -158,6 +158,14 @@ class ProxyFieldBaseView
         }
     }
 
+    /// \brief The field's notifier event, or nullptr if the WithNotifier tag is not set.
+    /// \details Used by the Rust FFI bridge (registry_bridge_macro.h, EXPORT_MW_COM_FIELD) to subscribe to and
+    /// receive a field's notifications through the same type-erased ProxyEventBase path it uses for events.
+    [[nodiscard]] ProxyEventBase* GetEventBase() const noexcept
+    {
+        return proxy_field_base_.proxy_event_base_dispatch_;
+    }
+
     [[nodiscard]] Result<void> GetEventBindingConstructionResult() const noexcept
     {
         // If the WithNotifier tag is not set, proxy_event_base_dispatch_ will be nullptr. In that case, we never had to

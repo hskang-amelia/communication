@@ -52,14 +52,6 @@ class TransportMock : public Transport
                  std::string,
                  score::cpp::span<const std::uint8_t>),
                 (override));
-    MOCK_METHOD(score::Result<void>,
-                Subscribe,
-                (score::mw::com::InstanceSpecifier, impl::ServiceElementType, std::string),
-                (override));
-    MOCK_METHOD(score::Result<void>,
-                Unsubscribe,
-                (score::mw::com::InstanceSpecifier, impl::ServiceElementType, std::string),
-                (override));
 };
 
 }  // namespace score::mw::com::gateway

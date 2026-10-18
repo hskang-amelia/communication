@@ -54,14 +54,6 @@ The gateway side of the copying path lives in `GatewayApplication`:
 * destination: `GatewayApplication::ReceiveSampleData` checks the size against the skeleton event's data type,
   `Allocate()`s, copies and `Send()`s (which notifies local consumers).
 
-### Relation to `../dds/DdsTransport`
-
-`DdsTransport` (pull style: per-element topics, `Subscribe` / `WaitForUpdate` / `TakeLastPayload`) stays as is.
-`NetworkTransport` is the one `TransportFactory` creates for `GatewayApplication`: it also carries the control path
-(ProvideService, Offer, StopOffer, (Un)Register) so the destination gateway actually creates and offers its Forwarding
-Skeleton, and it pushes received samples into `GatewayCore` instead of requiring polling. It does not override the
-pull APIs.
-
 ## Constraints
 
 * **Binary sample layout.** Samples are copied as the binary representation of the C++ data type (LoLa's in-memory
@@ -102,7 +94,7 @@ bazel build --//score/mw/com/gateway/transport_layer/network:with_cyclone_dds //
 
 The flags add the bus libraries and register the ids in `TransportFactory`. `network_core`, `network_transport`, the
 config parser and their tests build without the flags. **Not done yet:** `@zenoh_pico` and `@cyclonedds` are not
-registered in `MODULE.bazel` (same open point as `../dds`). The bus targets are tagged `manual` and expect
+registered in `MODULE.bazel`. The bus targets are tagged `manual` and expect
 `@zenoh_pico//:zenohpico` and `@cyclonedds//:ddsc`. Without access to the Bazel Central Registry, this change does
 not guess module versions.
 

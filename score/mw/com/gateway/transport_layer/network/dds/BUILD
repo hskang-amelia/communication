@@ -25,7 +25,7 @@ cc_library(
 )
 
 # generated/gateway_frame.{c,h} are checked-in idlc output (Cyclone DDS 0.10.5): `idlc -l c idl/gateway_frame.idl`.
-# Same `@cyclonedds//:ddsc` label and `manual` tag as ../../dds (DdsTransport); see ../README.md "Bazel integration".
+# Tagged `manual` because `@cyclonedds//:ddsc` is not registered yet; see ../README.md "Bazel integration".
 cc_library(
     name = "gateway_frame_idl",
     srcs = ["generated/gateway_frame.c"],

@@ -38,9 +38,7 @@ namespace score::mw::com::gateway::network
 /// (TypeIdRejections() counts these); the source only sees the delivery Ack, so the reason is logged at the
 /// destination.
 ///
-/// The pull-style copying APIs of Transport (Subscribe, WaitForUpdate, TakeLastPayload, IsMatched) are not
-/// overridden: GatewayApplication does not use them, received samples are pushed into
-/// GatewayCore::ReceiveSampleData instead.
+/// Received samples are pushed into GatewayCore::ReceiveSampleData.
 class NetworkTransport final : public Transport
 {
   public:

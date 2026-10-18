@@ -96,14 +96,13 @@ class GatewayCore
     /// \brief Reciprocal of Transport::ForwardSampleData — delivers a forwarded sample's payload to the
     /// (generic) skeleton locally within the destination domain, for a transport that doesn't support memory
     /// sharing.
-    /// \details Not pure virtual — see Transport::ForwardSampleData's doc comment for why. Default
-    /// implementation returns GatewayErrorc::kNotSupported; a GatewayApplication that's paired with a
-    /// copying-capable transport must override this.
+    /// \details Not pure virtual: the default implementation returns GatewayErrorc::kNotSupported. A GatewayCore
+    /// paired with a transport that does not support memory sharing has to override it.
     /// \param service_instance_specifier instance specifier of the service instance owning the service element.
     /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
     /// \param element_name name of the service element whose sample was forwarded.
-    /// \param sample_data the serialized sample payload, to be written into the Forwarding Skeleton's local
-    /// representation of this event/field.
+    /// \param sample_data the binary representation of the sample's data type, to be written into the Forwarding
+    /// Skeleton's local representation of this event/field.
     /// \return result indicating success or failure.
     virtual score::Result<void> ReceiveSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
                                                   impl::ServiceElementType element_type,

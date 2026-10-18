@@ -622,19 +622,23 @@ mod test {
 
         let skel = skeleton_alloc.clone();
         mock.expect_create_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| skel.allocate());
 
         mock.expect_skeleton_offer_service()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_| true);
 
         mock.expect_skeleton_stop_offer_service()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_| ());
 
         let skel_cleanup = skeleton_alloc.clone();
         mock.expect_destroy_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -673,12 +677,15 @@ mod test {
         let skeleton_alloc_clone = skeleton_alloc.clone();
         let event_alloc_clone = event_alloc.clone();
         mock.expect_create_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| skeleton_alloc_clone.allocate());
         mock.expect_get_event_from_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| event_alloc_clone.allocate());
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -688,6 +695,7 @@ mod test {
             });
 
         mock.expect_get_allocatee_ptr()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, allocatee_ptr, _| {
                 // SAFETY: Write a zeroed SampleAllocateePtr to the out-parameter for testing
@@ -701,18 +709,22 @@ mod test {
             });
         let data = data_alloc.clone();
         mock.expect_get_allocatee_data_ptr()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| data.allocate() as *mut std::ffi::c_void);
         mock.expect_skeleton_event_send_sample_allocatee()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _, _| true);
         mock.expect_delete_allocatee_ptr()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |allocatee_ptr, _| {
                 data_alloc.free(allocatee_ptr as *mut TestData);
             });
 
         mock.expect_destroy_skeleton()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 skeleton_alloc.free(ptr);

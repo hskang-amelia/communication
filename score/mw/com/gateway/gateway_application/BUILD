@@ -52,6 +52,7 @@ cc_library(
         "//score/mw/com/gateway:__subpackages__",
     ],
     deps = [
+        ":gateway_error",
         "//score/mw/com:types",
         "//score/mw/com/gateway/transport_layer:transport",
         "//score/mw/com/impl:service_element_type",

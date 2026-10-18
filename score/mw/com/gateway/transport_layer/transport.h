@@ -17,6 +17,9 @@
 #include "score/mw/com/types.h"
 #include "score/result/result.h"
 
+#include <score/span.hpp>
+
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -114,6 +117,94 @@ class Transport
         score::mw::com::InstanceSpecifier service_instance_specifier,
         impl::ServiceElementType element_type,
         std::string element_name) = 0;
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Copying-gateway APIs (IsMemorySharingSupported() == false). Not pure virtual: the existing
+    // memory-sharing-only implementation (transport_layer/sample) never overrides these and keeps compiling
+    // unchanged. Every method here returns TransportErrorc::kNotSupported by default (see transport.cpp) — a
+    // transport that returns false from IsMemorySharingSupported() MUST override all three, or a forwarded
+    // service using it will silently never actually deliver data. See this repo's README.md "Copying Gateway"
+    // row, which already named this gateway type; until now nothing in this class actually supported it.
+    // ---------------------------------------------------------------------------------------------------------
+
+    /// \brief Forwards the actual sample payload for an event/field to the destination gateway, when there is no
+    /// shared memory to make it visible in.
+    /// \details Mirrors NotifyUpdate's addressing (same three identifying parameters) — NotifyUpdate alone is
+    /// enough for a memory-sharing transport (the destination reads the update from shared memory itself), but a
+    /// copying transport has no shared memory for the destination to read from, so the payload has to travel
+    /// through this call instead.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
+    /// \param element_name name of the service element whose sample is being forwarded.
+    /// \param sample_data the serialized sample payload, exactly as the source-side proxy received it.
+    /// \return result indicating success or failure.
+    virtual score::Result<void> ForwardSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                                  impl::ServiceElementType element_type,
+                                                  std::string element_name,
+                                                  score::cpp::span<const std::uint8_t> sample_data);
+
+    /// \brief Subscribes for actual sample data (not just update notifications) for a service element, on a
+    /// transport that doesn't support memory sharing.
+    /// \details A memory-sharing transport's destination side already has direct access to the data once
+    /// RegisterUpdateNotification fires; a copying transport needs an explicit subscribe/unsubscribe pair so the
+    /// source side knows whether it's worth calling ForwardSampleData at all.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_type type of the service element (event, field, method). Currently only EVENT is supported.
+    /// \param element_name name of the service element to subscribe to.
+    /// \return result indicating success or failure.
+    virtual score::Result<void> Subscribe(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                          impl::ServiceElementType element_type,
+                                          std::string element_name);
+
+    /// \brief Reverse of Subscribe — see its doc comment for the corresponding semantics.
+    virtual score::Result<void> Unsubscribe(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                            impl::ServiceElementType element_type,
+                                            std::string element_name);
+
+    /// \brief Blocks (up to timeout_ms) until a sample or update-only ping actually arrives for a subscribed
+    /// service element, on a transport that doesn't support memory sharing.
+    /// \details Subscribe()/RegisterUpdateNotification() only set up the registration — neither one gives a
+    /// caller a way to actually wait for the next arrival. Every copying-gateway transport implementation has to
+    /// solve this somehow (a select/poll loop, a waitset, ...); this promotes that capability from a
+    /// binding-specific extension (previously only on one concrete DDS implementation) onto Transport itself, so
+    /// callers that only need "send bytes, then block for the reply" don't have to depend on a concrete
+    /// transport class to get it.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to wait on.
+    /// \param timeout_ms maximum time to wait, in milliseconds.
+    /// \return true if a sample/ping was observed before the timeout, false on timeout or if this transport
+    /// doesn't support it (see the default implementation in transport.cpp).
+    virtual bool WaitForUpdate(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                               const std::string& element_name,
+                               std::uint32_t timeout_ms);
+
+    /// \brief Reads the last actual payload received for a subscribed service element (empty if the last sample
+    /// was a zero-length update-only ping, nothing has arrived yet, or this transport doesn't support it).
+    /// \details Paired with WaitForUpdate() — see that method's doc comment for why this pair is promoted here
+    /// instead of staying a binding-specific extension.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to read.
+    /// \return the last received payload, or an empty vector (see above).
+    virtual std::vector<std::uint8_t> TakeLastPayload(
+        const score::mw::com::InstanceSpecifier& service_instance_specifier,
+        const std::string& element_name);
+
+    /// \brief Returns whether this service element currently has at least one matched peer —
+    /// i.e. whether discovery has actually found a counterpart to send to/receive from yet.
+    /// \details A copying-gateway transport with no shared memory to fall back on can silently
+    /// lose a sample sent before discovery finishes matching the fresh writer/reader pair it was
+    /// just set up on (default QoS doesn't queue for a not-yet-matched peer) — confirmed the hard
+    /// way, not hypothetically: a fresh process's first send after `ProvideService`/`Subscribe`
+    /// reliably raced this and timed out. This lets a caller poll until it's actually safe to send
+    /// the first real message, the same role `sm_lm_control_wait_connected`
+    /// (state_management/sm-service/cpp/control_client_ffi.h) already plays for `ILmControl`'s
+    /// own asynchronous mw::com service discovery.
+    /// \param service_instance_specifier instance specifier of the service instance owning the service element.
+    /// \param element_name name of the service element to check.
+    /// \return true once at least one peer is matched, false before that or if this transport
+    /// doesn't support it (see the default implementation in transport.cpp).
+    virtual bool IsMatched(const score::mw::com::InstanceSpecifier& service_instance_specifier,
+                           const std::string& element_name) const;
 };
 
 }  // namespace score::mw::com::gateway

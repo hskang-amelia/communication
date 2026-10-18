@@ -1,0 +1,13 @@
+// One DDS topic per (InstanceSpecifier, element_name) pair (see dds_transport.h's topic-naming
+// scheme) carries this type. NotifyUpdate() writes an empty `payload` (a pure "something changed"
+// ping); ForwardSampleData() writes the real serialized bytes. Both go through the same topic/
+// writer/reader — see DdsTransport's design-notes entry for why one topic serves both concerns.
+module score_gw_dds
+{
+    struct SamplePayload
+    {
+        unsigned long long update_seq;
+        sequence<octet> payload;
+    };
+    #pragma keylist SamplePayload
+};

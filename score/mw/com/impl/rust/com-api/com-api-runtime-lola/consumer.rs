@@ -1319,15 +1319,19 @@ mod test {
         let evt = event_alloc.clone();
 
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| evt.allocate());
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -1337,6 +1341,7 @@ mod test {
 
         let evt_cleanup = event_alloc.clone();
         mock.expect_unsubscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -1345,9 +1350,12 @@ mod test {
                 );
             });
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1382,16 +1390,20 @@ mod test {
         let proxy_alloc_clone = proxy_alloc.clone();
         let event_alloc_clone = event_alloc.clone();
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| proxy_alloc_clone.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| event_alloc_clone.allocate());
 
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -1399,16 +1411,15 @@ mod test {
                 ))
             });
         mock.expect_get_samples_from_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _, _, _| 1);
-        mock.expect_set_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_, _| true);
-        mock.expect_clear_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_| ());
+        // try_receive is synchronous, so no async receive handler is registered or cleared.
+        mock.expect_set_event_receive_handler().never();
+        mock.expect_clear_event_receive_handler().never();
 
         mock.expect_unsubscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -1416,9 +1427,12 @@ mod test {
                     "unsubscribe_to_event called with unknown pointer"
                 );
             });
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1455,23 +1469,30 @@ mod test {
         let evt = event_alloc.clone();
 
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| evt.allocate());
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         // Returning None here is the scenario under test, TypeOperations lookup failed.
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| None);
 
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         let bridge = SharedMockBridge::new(mock);
         let subscribable = LolaSubscribableImpl::<TestData, SharedMockBridge> {

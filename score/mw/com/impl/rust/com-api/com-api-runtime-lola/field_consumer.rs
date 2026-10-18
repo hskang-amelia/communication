@@ -148,16 +148,20 @@ mod test {
 
         let prox = proxy_alloc.clone();
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
         let evt = event_alloc.clone();
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| evt.allocate());
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -167,24 +171,25 @@ mod test {
 
         // New for Field: not exercised by any existing plain-Event test.
         mock.expect_proxy_event_get_free_sample_count()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_| 4);
         mock.expect_proxy_event_get_num_new_samples_available()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_| Some(1));
 
         mock.expect_get_samples_from_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _, _, _| 1);
-        mock.expect_set_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_, _| true);
-        mock.expect_clear_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_| ());
+        // try_receive is synchronous, so no async receive handler is registered or cleared.
+        mock.expect_set_event_receive_handler().never();
+        mock.expect_clear_event_receive_handler().never();
 
         let evt_cleanup = event_alloc.clone();
         mock.expect_unsubscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -193,9 +198,12 @@ mod test {
                 );
             });
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         let bridge = SharedMockBridge::new(mock);
         let subscribable = LolaFieldSubscriber::<FieldTestData, SharedMockBridge> {

@@ -64,20 +64,28 @@
 #ifndef SCORE_MW_COM_REGISTRY_BRIDGE_MACROS_H
 #define SCORE_MW_COM_REGISTRY_BRIDGE_MACROS_H
 
+#include "score/mw/com/impl/methods/proxy_method_base.h"
+#include "score/mw/com/impl/methods/proxy_method_binding.h"
+#include "score/mw/com/impl/methods/skeleton_method_base.h"
+#include "score/mw/com/impl/methods/skeleton_method_binding.h"
 #include "score/mw/com/impl/plumbing/sample_ptr.h"
 #include "score/mw/com/impl/proxy_base.h"
 #include "score/mw/com/impl/proxy_event.h"
 #include "score/mw/com/impl/proxy_event_base.h"
+#include "score/mw/com/impl/proxy_field.h"
 #include "score/mw/com/impl/skeleton_base.h"
 #include "score/mw/com/impl/skeleton_event.h"
 #include "score/mw/com/impl/skeleton_event_base.h"
+#include "score/mw/com/impl/skeleton_field.h"
 #include "score/mw/com/types.h"
 
 #include <score/assert.hpp>
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -147,6 +155,32 @@ void mw_com_impl_call_dyn_ref_fnmut_find_service(
     const ::score::mw::com::impl::rust::FatPtr* boxed_fnmut,
     void* service_handles,
     ::score::mw::com::impl::FindServiceHandle find_service_handle) noexcept;
+
+/// \brief Rust closure invocation for a registered SkeletonMethod handler.
+/// \details Called by the handler mw_com_skeleton_method_register_handler registers, whenever a proxy calls the
+/// method. The two std::optional<span<byte>> buffers of SkeletonMethodBinding's handler are flattened into
+/// (data, len, present) triples, since those types are not FFI-safe; `present` is false when the method has no
+/// in-arguments or returns void.
+/// \param boxed_fnmut Pointer to FatPtr representing the registered Rust closure
+/// \param quality_type QualityType of the caller, narrowed to std::uint8_t
+void mw_com_impl_call_method_handler(const ::score::mw::com::impl::rust::FatPtr* boxed_fnmut,
+                                     std::uint8_t quality_type,
+                                     std::uint8_t* in_args_data,
+                                     std::size_t in_args_len,
+                                     bool in_args_present,
+                                     std::uint8_t* return_data,
+                                     std::size_t return_len,
+                                     bool return_present) noexcept;
+
+/// \brief Rust closure invocation for a registered SkeletonField set handler.
+/// \details Called by the callable that FieldMemberOperationImpl::SkeletonRegisterSetHandler passes to
+/// SkeletonField<T>::RegisterSetHandler, whenever a proxy calls the field setter. `value` points to the
+/// FieldType the proxy requested; the Rust handler may replace it in place with the value to accept. SkeletonField
+/// then publishes that value to subscribers and returns it to the caller, exactly as for a C++ set handler.
+/// \param boxed_fn Pointer to FatPtr representing the Rust closure registered via
+/// mw_com_skeleton_field_register_set_handler
+/// \param value Pointer to the live FieldType value (in: requested value, out: accepted value)
+void mw_com_impl_call_field_set_handler(const ::score::mw::com::impl::rust::FatPtr* boxed_fn, void* value) noexcept;
 }
 
 /// \brief Template specialization of RustBoxedCallable for void return type
@@ -555,6 +589,300 @@ class MemberOperationImpl : public MemberOperation
     const TypeOperations* type_ops_ptr_;
 };
 
+/// \brief Interface for type-erased access to a Method member (as opposed to an Event member, see
+/// MemberOperation above): returns the ProxyMethodBinding/SkeletonMethodBinding underneath a generated
+/// Proxy/Skeleton's ProxyMethod<Signature>/SkeletonMethod<Signature> member.
+/// \note No TypeOperations equivalent is needed: the method bindings are already type-erased (byte spans plus a
+/// queue position); the typed layer is on the Rust side (method_concept.rs).
+class MethodMemberOperation
+{
+  public:
+    virtual ~MethodMemberOperation() = default;
+
+    /// \brief Get the type-erased ProxyMethodBinding underneath a ProxyBase's ProxyMethod<Signature> member.
+    /// \param proxy_ptr Pointer to ProxyBase instance
+    /// \return Pointer to ProxyMethodBinding if found (and the binding constructed successfully), nullptr
+    /// otherwise.
+    virtual ProxyMethodBinding* GetProxyMethodBinding(ProxyBase* proxy_ptr) = 0;
+
+    /// \brief Get the type-erased SkeletonMethodBinding underneath a SkeletonBase's SkeletonMethod<Signature>
+    /// member.
+    /// \param skeleton_ptr Pointer to SkeletonBase instance
+    /// \return Pointer to SkeletonMethodBinding if found, nullptr otherwise.
+    virtual SkeletonMethodBinding* GetSkeletonMethodBinding(SkeletonBase* skeleton_ptr) = 0;
+};
+
+/// \brief Template implementation of MethodMemberOperation for specific ProxyType and SkeletonType.
+/// \details `proxy_method_member`/`skeleton_method_member` are pointers to a ProxyMethod<Signature>/
+/// SkeletonMethod<Signature> data member on the generated Proxy/Skeleton class — the Signature itself is not a
+/// template parameter of this class (see class comment on MethodMemberOperation for why that's fine: the binding
+/// pointer these accessors return is already fully type-erased).
+template <typename ProxyType, typename SkeletonType, auto proxy_method_member, auto skeleton_method_member>
+class MethodMemberOperationImpl : public MethodMemberOperation
+{
+  public:
+    ProxyMethodBinding* GetProxyMethodBinding(ProxyBase* proxy_ptr) override
+    {
+        auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
+        if (proxy == nullptr)
+        {
+            return nullptr;
+        }
+        // proxy->*proxy_method_member is a ProxyMethod<Signature>&, which upcasts implicitly to
+        // ProxyMethodBase& (its base class) here — no Signature-specific code needed in this function.
+        return ProxyMethodBaseView{proxy->*proxy_method_member}.GetMethodBinding();
+    }
+
+    SkeletonMethodBinding* GetSkeletonMethodBinding(SkeletonBase* skeleton_ptr) override
+    {
+        if (skeleton_ptr == nullptr)
+        {
+            return nullptr;
+        }
+        auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
+        if (skeleton == nullptr)
+        {
+            return nullptr;
+        }
+        return SkeletonMethodBaseView{skeleton->*skeleton_method_member}.GetMethodBinding();
+    }
+};
+
+/// \brief Value passed in `out_error` by FieldMemberOperation when the failure has no C++ error code: the pointer
+/// was not of the expected type, or the field lacks the tag the operation needs (WithGetter / WithSetter).
+constexpr std::int32_t kFieldOperationUnavailable = -1;
+
+/// \brief Interface for typed access to a Field member's get/set/update operations from the Rust FFI layer.
+/// \details Fields go through the typed ProxyField<T>/SkeletonField<T> API rather
+/// than the type-erased method bindings underneath them: the getter/setter return type on the wire is
+/// score::Result<T> (field_getter_setter_signatures.h), whose layout only C++ knows, and SkeletonField itself
+/// implements the set-handler semantics (publishing the accepted value, tracking that a set handler is registered
+/// before OfferService) and the default get handler. Values cross the FFI boundary as raw FieldType memory, which is
+/// sound because Rust only uses this for CommData (Reloc) types.
+class FieldMemberOperation
+{
+  public:
+    virtual ~FieldMemberOperation() = default;
+
+    /// \brief Calls ProxyField<T>::Get() and copy-constructs the received value into `out_value`.
+    /// \param out_value Uninitialized storage for one FieldType, owned by the caller
+    /// \param out_error On failure, the C++ error code, or kFieldOperationUnavailable
+    /// \return true on success
+    virtual bool ProxyGet(ProxyBase* proxy_ptr, void* out_value, std::int32_t* out_error) = 0;
+
+    /// \brief Calls ProxyField<T>::Set(*in_value) and copy-constructs the value the skeleton accepted into
+    /// `out_value`. See ProxyGet for the parameters.
+    virtual bool ProxySet(ProxyBase* proxy_ptr, const void* in_value, void* out_value, std::int32_t* out_error) = 0;
+
+    /// \brief Calls SkeletonField<T>::Update(*value). Before OfferService this stores the initial value, which
+    /// SkeletonField requires before it can be offered.
+    virtual bool SkeletonUpdate(SkeletonBase* skeleton_ptr, const void* value) = 0;
+
+    /// \brief Installs a Rust closure as the field's set handler via SkeletonField<T>::RegisterSetHandler.
+    /// \details The closure is invoked through mw_com_impl_call_field_set_handler. SkeletonField has no hook to
+    /// unregister a set handler, so the boxed closure lives as long as the process (the same known gap as
+    /// mw_com_skeleton_method_register_handler).
+    virtual bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr, FatPtr handler) = 0;
+};
+
+namespace field_detail
+{
+// Tag detection: ProxyField<T>::Get()/Set() and SkeletonField<T>::RegisterSetHandler() are SFINAE-disabled unless
+// the field has the WithGetter/WithSetter tag, so these traits tell which operations a field member supports.
+template <typename Field, typename = void>
+struct HasGetter : std::false_type
+{
+};
+template <typename Field>
+struct HasGetter<Field, std::void_t<decltype(std::declval<Field&>().Get())>> : std::true_type
+{
+};
+
+template <typename Field, typename Value, typename = void>
+struct HasSetter : std::false_type
+{
+};
+template <typename Field, typename Value>
+struct HasSetter<Field, Value, std::void_t<decltype(std::declval<Field&>().Set(std::declval<const Value&>()))>>
+    : std::true_type
+{
+};
+
+template <typename Field, typename Value, typename = void>
+struct HasSetHandler : std::false_type
+{
+};
+template <typename Field, typename Value>
+struct HasSetHandler<Field,
+                     Value,
+                     std::void_t<decltype(std::declval<Field&>().RegisterSetHandler(std::declval<void (*)(Value&)>()))>>
+    : std::true_type
+{
+};
+
+inline void SetError(std::int32_t* out_error, const std::int32_t code) noexcept
+{
+    if (out_error != nullptr)
+    {
+        *out_error = code;
+    }
+}
+
+template <typename ErrorType>
+inline void SetError(std::int32_t* out_error, const ErrorType& error) noexcept
+{
+    SetError(out_error, static_cast<std::int32_t>(*error));
+}
+}  // namespace field_detail
+
+/// \brief Template implementation of FieldMemberOperation for a ProxyField<FieldType, Tags...>/
+/// SkeletonField<FieldType, Tags...> data member pair on the generated Proxy/Skeleton classes.
+template <typename ProxyType,
+          typename SkeletonType,
+          typename FieldType,
+          auto proxy_field_member,
+          auto skeleton_field_member>
+class FieldMemberOperationImpl : public FieldMemberOperation
+{
+    using ProxyFieldType = std::remove_reference_t<decltype(std::declval<ProxyType&>().*proxy_field_member)>;
+    using SkeletonFieldType = std::remove_reference_t<decltype(std::declval<SkeletonType&>().*skeleton_field_member)>;
+
+  public:
+    bool ProxyGet(ProxyBase* proxy_ptr, void* out_value, std::int32_t* out_error) override
+    {
+        if constexpr (field_detail::HasGetter<ProxyFieldType>::value)
+        {
+            auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
+            if ((proxy == nullptr) || (out_value == nullptr))
+            {
+                field_detail::SetError(out_error, kFieldOperationUnavailable);
+                return false;
+            }
+            auto result = (proxy->*proxy_field_member).Get();
+            if (!result.has_value())
+            {
+                field_detail::SetError(out_error, result.error());
+                return false;
+            }
+            new (out_value) FieldType(*result.value());
+            return true;
+        }
+        else
+        {
+            static_cast<void>(proxy_ptr);
+            static_cast<void>(out_value);
+            field_detail::SetError(out_error, kFieldOperationUnavailable);
+            return false;
+        }
+    }
+
+    bool ProxySet(ProxyBase* proxy_ptr, const void* in_value, void* out_value, std::int32_t* out_error) override
+    {
+        if constexpr (field_detail::HasSetter<ProxyFieldType, FieldType>::value)
+        {
+            auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
+            if ((proxy == nullptr) || (in_value == nullptr) || (out_value == nullptr))
+            {
+                field_detail::SetError(out_error, kFieldOperationUnavailable);
+                return false;
+            }
+            auto result = (proxy->*proxy_field_member).Set(*static_cast<const FieldType*>(in_value));
+            if (!result.has_value())
+            {
+                field_detail::SetError(out_error, result.error());
+                return false;
+            }
+            new (out_value) FieldType(*result.value());
+            return true;
+        }
+        else
+        {
+            static_cast<void>(proxy_ptr);
+            static_cast<void>(in_value);
+            static_cast<void>(out_value);
+            field_detail::SetError(out_error, kFieldOperationUnavailable);
+            return false;
+        }
+    }
+
+    bool SkeletonUpdate(SkeletonBase* skeleton_ptr, const void* value) override
+    {
+        auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
+        if ((skeleton == nullptr) || (value == nullptr))
+        {
+            return false;
+        }
+        return (skeleton->*skeleton_field_member).Update(*static_cast<const FieldType*>(value)).has_value();
+    }
+
+    bool SkeletonRegisterSetHandler(SkeletonBase* skeleton_ptr, FatPtr handler) override
+    {
+        if constexpr (field_detail::HasSetHandler<SkeletonFieldType, FieldType>::value)
+        {
+            auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
+            if (skeleton == nullptr)
+            {
+                return false;
+            }
+            return (skeleton->*skeleton_field_member)
+                .RegisterSetHandler([handler](FieldType& value) {
+                    mw_com_impl_call_field_set_handler(&handler, &value);
+                })
+                .has_value();
+        }
+        else
+        {
+            static_cast<void>(skeleton_ptr);
+            static_cast<void>(handler);
+            return false;
+        }
+    }
+};
+
+/// \brief MemberOperation for a Field's notifier event, so that the existing event FFI (subscribe, receive,
+/// allocate, zero-copy send) works on fields by field name.
+/// \details A field's notifier is a real ProxyEvent<FieldType>/SkeletonEvent<FieldType> owned by the field, so
+/// TypeOperationImpl<FieldType>'s casts apply unchanged. GetProxyEvent returns nullptr for a field without the
+/// WithNotifier tag.
+template <typename ProxyType,
+          typename SkeletonType,
+          typename FieldType,
+          auto proxy_field_member,
+          auto skeleton_field_member>
+class FieldEventMemberOperationImpl : public MemberOperation
+{
+  public:
+    explicit FieldEventMemberOperationImpl(const TypeOperations* type_ops) noexcept : type_ops_ptr_{type_ops} {}
+
+    ProxyEventBase* GetProxyEvent(ProxyBase* proxy_ptr) override
+    {
+        auto* proxy = dynamic_cast<ProxyType*>(proxy_ptr);
+        if (proxy == nullptr)
+        {
+            return nullptr;
+        }
+        return ProxyFieldBaseView{proxy->*proxy_field_member}.GetEventBase();
+    }
+
+    SkeletonEventBase* GetSkeletonEvent(SkeletonBase* skeleton_ptr) override
+    {
+        auto* skeleton = dynamic_cast<SkeletonType*>(skeleton_ptr);
+        if (skeleton == nullptr)
+        {
+            return nullptr;
+        }
+        return &SkeletonFieldBaseView{skeleton->*skeleton_field_member}.GetEventBase();
+    }
+
+    const TypeOperations* GetTypeOps() const noexcept override
+    {
+        return type_ops_ptr_;
+    }
+
+  private:
+    const TypeOperations* type_ops_ptr_;
+};
+
 /// \brief Interface for type-erased proxy and skeleton creation operations
 /// \details Provides methods to create proxy/skeleton instances and register/retrieve member operations.
 /// Maintains a registry of member operations for events, methods, and fields.
@@ -596,9 +924,51 @@ class InterfaceOperations
         return nullptr;
     }
 
+    /// \brief Register a method member operation (see MethodMemberOperation). Kept in a separate map from
+    /// RegisterMemberOperation's (event) map: methods and events are looked up via separate FFI entry points
+    /// (mw_com_get_method_from_proxy/skeleton vs. mw_com_get_event_from_proxy/skeleton) since Rust already knows
+    /// statically, from the `interface!` macro expansion, whether a given member is a Method or an Event/Field.
+    void RegisterMethodOperation(const std::string_view member_name, std::unique_ptr<MethodMemberOperation> ops)
+    {
+        method_operation_map_[member_name] = std::move(ops);
+    }
+
+    /// \brief Get method member operation by name. See RegisterMethodOperation.
+    MethodMemberOperation* GetMethodOperation(const std::string_view member_name)
+    {
+        auto it = method_operation_map_.find(member_name);
+        if (it != method_operation_map_.end())
+        {
+            return it->second.get();
+        }
+        return nullptr;
+    }
+
+    /// \brief Register a field member operation (see FieldMemberOperation). The field's notifier event is
+    /// registered separately, under the same name, through RegisterMemberOperation.
+    void RegisterFieldOperation(const std::string_view member_name, std::unique_ptr<FieldMemberOperation> ops)
+    {
+        field_operation_map_[member_name] = std::move(ops);
+    }
+
+    /// \brief Get field member operation by name. See RegisterFieldOperation.
+    FieldMemberOperation* GetFieldOperation(const std::string_view member_name)
+    {
+        auto it = field_operation_map_.find(member_name);
+        if (it != field_operation_map_.end())
+        {
+            return it->second.get();
+        }
+        return nullptr;
+    }
+
   private:
     using MemberOperationMap = std::unordered_map<std::string_view, std::unique_ptr<MemberOperation>>;
     MemberOperationMap member_operation_map_;
+    using MethodOperationMap = std::unordered_map<std::string_view, std::unique_ptr<MethodMemberOperation>>;
+    MethodOperationMap method_operation_map_;
+    using FieldOperationMap = std::unordered_map<std::string_view, std::unique_ptr<FieldMemberOperation>>;
+    FieldOperationMap field_operation_map_;
 };
 
 /// \brief Template implementation of InterfaceOperations for specific Proxy and Skeleton types
@@ -714,7 +1084,70 @@ class GlobalRegistryMapping
     {
         return GetInterfaceOperation(interface_id);
     }
+
+    /// \brief Register method operation for a specific interface and member name. See
+    /// InterfaceOperations::RegisterMethodOperation. Called by the EXPORT_MW_COM_METHOD macro.
+    static void RegisterMethodOperation(const std::string_view interface_id,
+                                        const std::string_view member_name,
+                                        std::unique_ptr<MethodMemberOperation> ops)
+    {
+        const auto& registries = GetInterfaceOperation(interface_id);
+        if (registries)
+        {
+            registries->RegisterMethodOperation(member_name, std::move(ops));
+        }
+    }
+
+    /// \brief Find method operation for a specific interface and member name.
+    static MethodMemberOperation* FindMethodOperation(const std::string_view interface_id,
+                                                      const std::string_view member_name)
+    {
+        auto* ops = GetInterfaceOperation(interface_id);
+        if (ops)
+        {
+            return ops->GetMethodOperation(member_name);
+        }
+        return nullptr;
+    }
+
+    /// \brief Register field operation for a specific interface and member name. Called by EXPORT_MW_COM_FIELD.
+    static void RegisterFieldOperation(const std::string_view interface_id,
+                                       const std::string_view member_name,
+                                       std::unique_ptr<FieldMemberOperation> ops)
+    {
+        const auto& registries = GetInterfaceOperation(interface_id);
+        if (registries)
+        {
+            registries->RegisterFieldOperation(member_name, std::move(ops));
+        }
+    }
+
+    /// \brief Find field operation for a specific interface and member name.
+    static FieldMemberOperation* FindFieldOperation(const std::string_view interface_id,
+                                                    const std::string_view member_name)
+    {
+        auto* ops = GetInterfaceOperation(interface_id);
+        if (ops)
+        {
+            return ops->GetFieldOperation(member_name);
+        }
+        return nullptr;
+    }
 };
+
+namespace field_detail
+{
+/// \brief Looks up a field's FieldMemberOperation for the FFI entry points in registry_bridge_macro.cpp.
+inline FieldMemberOperation* FindFieldOperation(const StringView interface_id, const StringView field_id) noexcept
+{
+    if ((interface_id.data == nullptr) || (field_id.data == nullptr))
+    {
+        return nullptr;
+    }
+    return GlobalRegistryMapping::FindFieldOperation(static_cast<std::string_view>(interface_id),
+                                                     static_cast<std::string_view>(field_id));
+}
+}  // namespace field_detail
 
 // Declare the FFI function for Rust closure invocation with type erasure.
 /// Helper function to get singleton TypeOperations instance for each type T
@@ -793,6 +1226,70 @@ inline ::score::mw::com::impl::rust::TypeOperationImpl<T>& get_type_operations()
     };                                                                                                            \
                                                                                                                   \
     event_member##_EventRegistrationHelper event_member##_event_reg_instance;                                     \
+    } /* namespace */
+
+/// \brief Macro to register method member operations (see MethodMemberOperation/MethodMemberOperationImpl).
+/// \details Unlike EXPORT_MW_COM_EVENT, this macro takes no type parameter: the Signature of the underlying
+/// ProxyMethod<Signature>/SkeletonMethod<Signature> member is inferred from the member pointer itself
+/// (&ProxyType::method_member), and MethodMemberOperationImpl doesn't need it as a template parameter because the
+/// binding pointers it hands back are already fully type-erased (see MethodMemberOperation's class comment).
+/// \param method_member Method member name in Proxy and Skeleton classes (e.g., get_tire_pressure)
+/// \note Example usage: EXPORT_MW_COM_METHOD(get_tire_pressure)
+#define EXPORT_MW_COM_METHOD(method_member)                                                                \
+    struct method_member##_MethodRegistrationHelper                                                        \
+    {                                                                                                      \
+        method_member##_MethodRegistrationHelper()                                                         \
+        {                                                                                                  \
+            auto method_info = std::make_unique<                                                           \
+                ::score::mw::com::impl::rust::MethodMemberOperationImpl<ProxyType,                         \
+                                                                        SkeletonType,                      \
+                                                                        &ProxyType::method_member,         \
+                                                                        &SkeletonType::method_member>>();  \
+                                                                                                           \
+            ::score::mw::com::impl::rust::GlobalRegistryMapping::RegisterMethodOperation(                  \
+                std::string_view(id_interface), std::string_view(#method_member), std::move(method_info)); \
+        }                                                                                                  \
+    };                                                                                                     \
+                                                                                                           \
+    static method_member##_MethodRegistrationHelper method_member##_method_reg_instance;
+
+/// \brief Macro to register field member operations (see FieldMemberOperation/FieldEventMemberOperationImpl).
+/// \details Registers two operations under the field's name: the field's notifier event, so the event FFI
+/// (subscribe, receive, allocate, zero-copy send) works on the field, and the typed get/set/update/set-handler
+/// operations. Which of them succeed at runtime follows the field's tags (WithGetter, WithSetter, WithNotifier).
+/// \param field_type Data type of the field (e.g., Tire)
+/// \param field_member Field member name in Proxy and Skeleton classes (e.g., tire_pressure)
+/// \note Example usage: EXPORT_MW_COM_FIELD(Tire, tire_pressure)
+#define EXPORT_MW_COM_FIELD(field_type, field_member)                                                                 \
+    struct field_member##_FieldRegistrationHelper                                                                     \
+    {                                                                                                                 \
+        field_member##_FieldRegistrationHelper()                                                                      \
+        {                                                                                                             \
+            auto& type_ops = ::score::mw::com::impl::rust::get_type_operations<field_type>();                         \
+                                                                                                                      \
+            auto event_info = std::make_unique<                                                                       \
+                ::score::mw::com::impl::rust::FieldEventMemberOperationImpl<ProxyType,                                \
+                                                                            SkeletonType,                             \
+                                                                            field_type,                               \
+                                                                            &ProxyType::field_member,                 \
+                                                                            &SkeletonType::field_member>>(&type_ops); \
+            ::score::mw::com::impl::rust::GlobalRegistryMapping::RegisterMemberOperation(                             \
+                std::string_view(id_interface), std::string_view(#field_member), std::move(event_info));              \
+                                                                                                                      \
+            auto field_info = std::make_unique<                                                                       \
+                ::score::mw::com::impl::rust::FieldMemberOperationImpl<ProxyType,                                     \
+                                                                       SkeletonType,                                  \
+                                                                       field_type,                                    \
+                                                                       &ProxyType::field_member,                      \
+                                                                       &SkeletonType::field_member>>();               \
+            ::score::mw::com::impl::rust::GlobalRegistryMapping::RegisterFieldOperation(                              \
+                std::string_view(id_interface), std::string_view(#field_member), std::move(field_info));              \
+        }                                                                                                             \
+    };                                                                                                                \
+                                                                                                                      \
+    namespace                                                                                                         \
+    {                                                                                                                 \
+    field_member##_FieldRegistrationHelper field_member##_field_reg_instance;                                         \
     } /* namespace */
 
 #define END_EXPORT_MW_COM_INTERFACE() }  // namespace id##_detail

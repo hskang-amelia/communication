@@ -29,6 +29,7 @@
 /// BEGIN_EXPORT_MW_COM_INTERFACE(VehicleInterface, VehicleProxy, VehicleSkeleton)
 /// EXPORT_MW_COM_EVENT(Tire, left_tire)
 /// EXPORT_MW_COM_EVENT(Exhaust, exhaust)
+/// EXPORT_MW_COM_FIELD(Tire, spare_tire)  // fields: get/set/update/set handler and notifier
 /// END_EXPORT_MW_COM_INTERFACE()
 ///
 /// EXPORT_MW_COM_TYPE(TireType, Tire)
@@ -40,7 +41,7 @@
 
 // Include the FFI registry infrastructure that provides all type declarations,
 // helper functions, and registration macros (BEGIN_EXPORT_MW_COM_INTERFACE,
-// EXPORT_MW_COM_EVENT, END_EXPORT_MW_COM_INTERFACE, EXPORT_MW_COM_TYPE).
+// EXPORT_MW_COM_EVENT, EXPORT_MW_COM_FIELD, END_EXPORT_MW_COM_INTERFACE, EXPORT_MW_COM_TYPE).
 
 #include "score/mw/com/impl/rust/com-api/com-api-ffi-lola/registry_bridge_macro.h"
 

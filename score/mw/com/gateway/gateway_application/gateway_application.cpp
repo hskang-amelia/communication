@@ -21,6 +21,7 @@
 #include <score/assert.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
@@ -489,6 +490,13 @@ score::Result<void> GatewayApplication::RegisterUpdateNotification(
     auto scoped_handler = std::make_shared<ReceiveCallback>(
         scope_, [this, spec = specifier_str, elem_name = std::string(element_name), elem_type = element_type]() {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
+            if (!transport_layer_->IsMemorySharingSupported())
+            {
+                // Copying gateway: the destination has no access to our shared memory, so the data itself has to
+                // travel through the transport. The Forwarding Skeleton's Send() then notifies its consumers.
+                ForwardNewSamples(spec, elem_name, elem_type);
+                return;
+            }
             auto specifier_result = score::mw::com::InstanceSpecifier::Create(std::string{spec});
             if (specifier_result.has_value())
             {
@@ -577,6 +585,118 @@ score::Result<void> GatewayApplication::NotifyUpdate(score::mw::com::InstanceSpe
     {
         score::mw::log::LogError() << "GatewayApplication: Failed to notify update for event " << updated_element_name;
         return MakeUnexpected(GatewayErrorc::kNotificationFailed);
+    }
+    return {};
+}
+
+void GatewayApplication::ForwardNewSamples(const std::string& specifier_str,
+                                           const std::string& element_name,
+                                           impl::ServiceElementType element_type)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto it = proxies_.find(specifier_str);
+    if (it == proxies_.end())
+    {
+        score::mw::log::LogWarn() << "GatewayApplication: No proxy found to forward samples for " << specifier_str;
+        return;
+    }
+    auto event_map = it->second.GetEvents();
+    auto event_it = event_map.find(element_name);
+    if (event_it == event_map.cend())
+    {
+        score::mw::log::LogWarn() << "GatewayApplication: Event " << element_name << " not found in proxy for "
+                                  << specifier_str;
+        return;
+    }
+    auto& proxy_event = event_it->second;
+    if (proxy_event.HasSerializedFormat())
+    {
+        // The sample size is only known for the binary representation of the data type.
+        score::mw::log::LogError() << "GatewayApplication: Forwarding serialized samples is not supported ("
+                                   << element_name << ")";
+        return;
+    }
+
+    auto specifier_result = score::mw::com::InstanceSpecifier::Create(std::string{specifier_str});
+    if (!specifier_result.has_value())
+    {
+        score::mw::log::LogError() << "GatewayApplication: Invalid instance specifier: " << specifier_str;
+        return;
+    }
+    const auto specifier = std::move(specifier_result).value();
+    const std::size_t sample_size = proxy_event.GetDataTypeSizeInfo().Size();
+
+    const auto get_result = proxy_event.GetNewSamples(
+        [this, &specifier, &element_name, element_type, sample_size](auto sample) noexcept {
+            const auto* const bytes = static_cast<const std::uint8_t*>(sample.get());
+            const auto forward_result = transport_layer_->ForwardSampleData(
+                specifier, element_type, element_name, score::cpp::span<const std::uint8_t>{bytes, sample_size});
+            if (!forward_result.has_value())
+            {
+                score::mw::log::LogError() << "GatewayApplication: Failed to forward sample for " << element_name;
+            }
+        },
+        kGatewaySubscribeSamples);
+    if (!get_result.has_value())
+    {
+        score::mw::log::LogError() << "GatewayApplication: GetNewSamples failed for " << element_name;
+    }
+}
+
+score::Result<void> GatewayApplication::ReceiveSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                                          impl::ServiceElementType element_type,
+                                                          std::string element_name,
+                                                          score::cpp::span<const std::uint8_t> sample_data)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto specifier_str = std::string(service_instance_specifier.ToString());
+
+    if (element_type != impl::ServiceElementType::EVENT)
+    {
+        return MakeUnexpected(GatewayErrorc::kNotSupported);
+    }
+
+    auto it = skeletons_.find(specifier_str);
+    if (it == skeletons_.end())
+    {
+        score::mw::log::LogWarn() << "GatewayApplication: No skeleton found for forwarded sample " << specifier_str;
+        return MakeUnexpected(GatewayErrorc::kUnknownServiceInstance);
+    }
+
+    auto event_map = it->second.GetEvents();
+    auto event_it = event_map.find(element_name);
+    if (event_it == event_map.cend())
+    {
+        score::mw::log::LogWarn() << "GatewayApplication: Event " << element_name
+                                  << " not found in skeleton for forwarded sample";
+        return MakeUnexpected(GatewayErrorc::kUnknownServiceElement);
+    }
+
+    auto& skeleton_event = event_it->second;
+    const auto expected_size = skeleton_event.GetSizeInfo().size;
+    if (sample_data.size() != expected_size)
+    {
+        score::mw::log::LogError() << "GatewayApplication: Forwarded sample for " << element_name << " has "
+                                   << sample_data.size() << " bytes, expected " << expected_size;
+        return MakeUnexpected(GatewayErrorc::kSampleDeliveryFailed);
+    }
+
+    auto allocate_result = skeleton_event.Allocate();
+    if (!allocate_result.has_value())
+    {
+        score::mw::log::LogError() << "GatewayApplication: Failed to allocate sample for " << element_name;
+        return MakeUnexpected(GatewayErrorc::kSampleDeliveryFailed);
+    }
+    auto sample = std::move(allocate_result).value();
+    if (expected_size > 0U)
+    {
+        std::memcpy(sample.Get(), sample_data.data(), expected_size);
+    }
+    const auto send_result = skeleton_event.Send(std::move(sample));
+    if (!send_result.has_value())
+    {
+        score::mw::log::LogError() << "GatewayApplication: Failed to send forwarded sample for " << element_name;
+        return MakeUnexpected(GatewayErrorc::kSampleDeliveryFailed);
     }
     return {};
 }

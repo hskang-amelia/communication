@@ -16,6 +16,7 @@
 #include "score/mw/com/gateway/gateway_application/configuration/gateway_configuration.h"
 #include "score/mw/com/gateway/gateway_application/gateway_error.h"
 #include "score/mw/com/gateway/transport_layer/transport_mock.h"
+#include "score/mw/com/impl/bindings/mock_binding/sample_allocatee_ptr.h"
 #include "score/mw/com/impl/bindings/mock_binding/skeleton.h"
 #include "score/mw/com/impl/configuration/lola_service_instance_deployment.h"
 #include "score/mw/com/impl/find_service_handle.h"
@@ -24,6 +25,7 @@
 #include "score/mw/com/impl/i_binding_runtime.h"
 #include "score/mw/com/impl/instance_identifier.h"
 #include "score/mw/com/impl/instance_specifier.h"
+#include "score/mw/com/impl/plumbing/sample_allocatee_ptr.h"
 #include "score/mw/com/impl/runtime_mock.h"
 #include "score/mw/com/impl/scoped_event_receive_handler.h"
 #include "score/mw/com/impl/service_discovery_client_mock.h"
@@ -37,6 +39,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
@@ -172,6 +176,24 @@ TEST(GatewayApplicationNotifyUpdateTest, NoSkeletonReturnsUnknownServiceInstance
 
     // When NotifyUpdate is called for that specifier
     const auto result = app.NotifyUpdate(MakeSpecifier("svc/b"), impl::ServiceElementType::EVENT, "EventA");
+
+    // Then the call must fail with kUnknownServiceInstance
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), GatewayErrorc::kUnknownServiceInstance);
+}
+
+// ReceiveSampleData tests (copying gateway, destination side)
+TEST(GatewayApplicationReceiveSampleDataTest, NoSkeletonReturnsUnknownServiceInstance)
+{
+    // Given a GatewayApplication with no skeleton registered for the specifier
+    GatewayApplication app{MakeConfig({}, {"svc/b"})};
+    const std::array<std::uint8_t, 4U> data{1U, 2U, 3U, 4U};
+
+    // When a forwarded sample arrives for that specifier
+    const auto result = app.ReceiveSampleData(MakeSpecifier("svc/b"),
+                                              impl::ServiceElementType::EVENT,
+                                              "EventA",
+                                              score::cpp::span<const std::uint8_t>{data.data(), data.size()});
 
     // Then the call must fail with kUnknownServiceInstance
     ASSERT_FALSE(result.has_value());
@@ -477,6 +499,8 @@ class GatewayApplicationRegisterCallbackTest : public ::testing::Test
 
         auto transport_owned = std::make_unique<::testing::NiceMock<TransportMock>>();
         transport_mock_ = transport_owned.get();
+        // Memory-sharing transport unless a test switches to the copying path explicitly.
+        ON_CALL(*transport_mock_, IsMemorySharingSupported()).WillByDefault(::testing::Return(true));
         app_ = std::make_unique<GatewayApplication>(
             GatewayConfiguration{{"svc/a"}, {"svc/b"}, "sample_hypervisor", "/etc/gateway/transport.json"},
             std::move(transport_owned));
@@ -721,6 +745,8 @@ class GatewayApplicationFlowTest : public ::testing::Test
         // --- Transport ---------------------------------------------------------------------------
         auto transport_owned = std::make_unique<::testing::NiceMock<TransportMock>>();
         transport_mock_ = transport_owned.get();
+        // Memory-sharing transport unless a test switches to the copying path explicitly.
+        ON_CALL(*transport_mock_, IsMemorySharingSupported()).WillByDefault(::testing::Return(true));
         ON_CALL(*transport_mock_, ProvideService(::testing::_, ::testing::_))
             .WillByDefault(::testing::Return(score::Result<void>{}));
         ON_CALL(*transport_mock_, StopOfferService(::testing::_))
@@ -1160,6 +1186,145 @@ TEST_F(GatewayApplicationFlowTest, NotifyUpdateUnknownEventReturnsError)
     const auto result = app_->NotifyUpdate(MakeSpecifier("svc/a"), impl::ServiceElementType::EVENT, "EventX");
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), GatewayErrorc::kUnknownServiceElement);
+}
+
+// --- Copying gateway (Transport::IsMemorySharingSupported() == false) ------------------------------
+
+TEST_F(GatewayApplicationFlowTest, ReceiveHandlerOnCopyingTransportReadsSamplesInsteadOfNotifying)
+{
+    // Given a copying transport and a discovered service whose proxy carries "EventA"
+    ON_CALL(*transport_mock_, IsMemorySharingSupported()).WillByDefault(::testing::Return(false));
+    StartAndCaptureFindHandler();
+    FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
+    ASSERT_NE(proxy_event_mocks_.find("EventA"), proxy_event_mocks_.cend());
+    auto& proxy_event = *proxy_event_mocks_["EventA"];
+
+    // and the binding fires the stored receive handler immediately when it is set
+    ON_CALL(proxy_event, SetReceiveHandler(::testing::_))
+        .WillByDefault(::testing::Invoke([](std::weak_ptr<impl::ScopedEventReceiveHandler> handler) {
+            if (auto locked = handler.lock())
+            {
+                (*locked)();
+            }
+            return score::Result<void>{};
+        }));
+    ON_CALL(proxy_event, HasSerializedFormat()).WillByDefault(::testing::Return(false));
+
+    // Then the new samples are read from the proxy for forwarding, and no data-less NotifyUpdate is sent.
+    EXPECT_CALL(proxy_event, GetNewSamples(::testing::_, ::testing::_))
+        .WillOnce(::testing::Return(score::Result<std::size_t>{0U}));
+    EXPECT_CALL(*transport_mock_, NotifyUpdate(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    // When RegisterUpdateNotification is requested (which sets and thus fires the handler)
+    const auto result =
+        app_->RegisterUpdateNotification(MakeSpecifier("svc/a"), impl::ServiceElementType::EVENT, "EventA");
+    EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(GatewayApplicationFlowTest, ReceiveHandlerOnCopyingTransportSkipsSerializedSamples)
+{
+    // Given a copying transport and a proxy event whose samples are in a serialized format
+    ON_CALL(*transport_mock_, IsMemorySharingSupported()).WillByDefault(::testing::Return(false));
+    StartAndCaptureFindHandler();
+    FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
+    ASSERT_NE(proxy_event_mocks_.find("EventA"), proxy_event_mocks_.cend());
+    auto& proxy_event = *proxy_event_mocks_["EventA"];
+    ON_CALL(proxy_event, SetReceiveHandler(::testing::_))
+        .WillByDefault(::testing::Invoke([](std::weak_ptr<impl::ScopedEventReceiveHandler> handler) {
+            if (auto locked = handler.lock())
+            {
+                (*locked)();
+            }
+            return score::Result<void>{};
+        }));
+    ON_CALL(proxy_event, HasSerializedFormat()).WillByDefault(::testing::Return(true));
+
+    // Then nothing is read or forwarded (the sample size is unknown for serialized data)
+    EXPECT_CALL(proxy_event, GetNewSamples(::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(*transport_mock_, ForwardSampleData(::testing::_, ::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    const auto result =
+        app_->RegisterUpdateNotification(MakeSpecifier("svc/a"), impl::ServiceElementType::EVENT, "EventA");
+    EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(GatewayApplicationFlowTest, ReceiveSampleDataWritesIntoSkeletonAndSends)
+{
+    // Given a provided service with "EventA" (16 bytes, see MakeElements)
+    ASSERT_TRUE(app_->ProvideService(MakeSpecifier("svc/a"), MakeElements({"EventA"})).has_value());
+    ASSERT_NE(skeleton_event_mocks_.find("EventA"), skeleton_event_mocks_.cend());
+    auto& skeleton_event = *skeleton_event_mocks_["EventA"];
+    ON_CALL(skeleton_event, GetEventDataTypeSizeInfo())
+        .WillByDefault(::testing::Return(score::memory::DataTypeSizeInfo{16U, 8U}));
+
+    // and the binding hands out a 16 byte sample buffer
+    std::array<std::uint8_t, 16U> slot{};
+    EXPECT_CALL(skeleton_event, Allocate(::testing::_)).WillOnce(::testing::Invoke([&slot](auto) {
+        impl::mock_binding::SampleAllocateePtr allocation{slot.data(), [](void*) {}};
+        return score::Result<impl::SampleAllocateePtr<void>>{impl::MakeSampleAllocateePtr(std::move(allocation))};
+    }));
+    // Then the filled sample is sent (which also notifies the local consumers)
+    EXPECT_CALL(skeleton_event, Send(::testing::_, ::testing::_)).WillOnce(::testing::Return(score::Result<void>{}));
+    EXPECT_CALL(skeleton_event, Notify()).Times(0);
+
+    // When a forwarded sample arrives
+    std::array<std::uint8_t, 16U> data{};
+    for (std::size_t i = 0U; i < data.size(); ++i)
+    {
+        data[i] = static_cast<std::uint8_t>(i + 1U);
+    }
+    const auto result = app_->ReceiveSampleData(MakeSpecifier("svc/a"),
+                                                impl::ServiceElementType::EVENT,
+                                                "EventA",
+                                                score::cpp::span<const std::uint8_t>{data.data(), data.size()});
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(slot, data);
+}
+
+TEST_F(GatewayApplicationFlowTest, ReceiveSampleDataWithWrongSizeIsRejected)
+{
+    // Given a provided service with a 16 byte "EventA"
+    ASSERT_TRUE(app_->ProvideService(MakeSpecifier("svc/a"), MakeElements({"EventA"})).has_value());
+    auto& skeleton_event = *skeleton_event_mocks_["EventA"];
+    ON_CALL(skeleton_event, GetEventDataTypeSizeInfo())
+        .WillByDefault(::testing::Return(score::memory::DataTypeSizeInfo{16U, 8U}));
+
+    // Then nothing is allocated or sent
+    EXPECT_CALL(skeleton_event, Allocate(::testing::_)).Times(0);
+    EXPECT_CALL(skeleton_event, Send(::testing::_, ::testing::_)).Times(0);
+
+    // When a forwarded sample of the wrong size arrives
+    const std::array<std::uint8_t, 4U> data{1U, 2U, 3U, 4U};
+    const auto result = app_->ReceiveSampleData(MakeSpecifier("svc/a"),
+                                                impl::ServiceElementType::EVENT,
+                                                "EventA",
+                                                score::cpp::span<const std::uint8_t>{data.data(), data.size()});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), GatewayErrorc::kSampleDeliveryFailed);
+}
+
+TEST_F(GatewayApplicationFlowTest, ReceiveSampleDataUnknownEventReturnsError)
+{
+    ASSERT_TRUE(app_->ProvideService(MakeSpecifier("svc/a"), MakeElements({"EventA"})).has_value());
+    const std::array<std::uint8_t, 1U> data{0U};
+    const auto result = app_->ReceiveSampleData(MakeSpecifier("svc/a"),
+                                                impl::ServiceElementType::EVENT,
+                                                "EventX",
+                                                score::cpp::span<const std::uint8_t>{data.data(), data.size()});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), GatewayErrorc::kUnknownServiceElement);
+}
+
+TEST_F(GatewayApplicationFlowTest, ReceiveSampleDataSupportsEventsOnly)
+{
+    ASSERT_TRUE(app_->ProvideService(MakeSpecifier("svc/a"), MakeElements({"EventA"})).has_value());
+    const std::array<std::uint8_t, 1U> data{0U};
+    const auto result = app_->ReceiveSampleData(MakeSpecifier("svc/a"),
+                                                impl::ServiceElementType::FIELD,
+                                                "EventA",
+                                                score::cpp::span<const std::uint8_t>{data.data(), data.size()});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), GatewayErrorc::kNotSupported);
 }
 
 TEST_F(GatewayApplicationFlowTest, ProvideServiceOfferFailureErasesSkeleton)

@@ -1,0 +1,21 @@
+{
+  "rpc": {
+    "ack-timeout-ms": 200,
+    "max-attempts": 5
+  },
+  "type-check": {
+    "policy": "warn",
+    "type-ids": {
+      "/vehicle/drive_mode": {
+        "mode": "DriveMode@1.2"
+      }
+    }
+  },
+  "zenoh-pico": {
+    "mode": "peer",
+    "listen": "tcp/0.0.0.0:7447",
+    "local-key": "score/gateway/hpc/inbox",
+    "remote-key": "score/gateway/zonal_front/inbox",
+    "max-frame-size": 65536
+  }
+}

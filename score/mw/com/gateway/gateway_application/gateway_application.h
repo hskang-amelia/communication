@@ -64,6 +64,15 @@ class GatewayApplication : public GatewayCore
                                      impl::ServiceElementType updated_element_type,
                                      std::string updated_element_name) override;
 
+    /// \brief Copying gateway, destination side: writes a sample forwarded via Transport::ForwardSampleData into
+    /// the Forwarding Skeleton's own shared memory and sends it to local consumers.
+    /// \details Only events are supported. sample_data must have exactly the size of the event's data type as
+    /// announced in ProvideService (binary representation, no serialization).
+    score::Result<void> ReceiveSampleData(score::mw::com::InstanceSpecifier service_instance_specifier,
+                                          impl::ServiceElementType element_type,
+                                          std::string element_name,
+                                          score::cpp::span<const std::uint8_t> sample_data) override;
+
   private:
     using FindCallbackScopedCb =
         safecpp::MoveOnlyScopedFunction<void(score::mw::com::ServiceHandleContainer<score::mw::com::HandleType>,
@@ -100,6 +109,11 @@ class GatewayApplication : public GatewayCore
                                     const std::string& event_name,
                                     bool has_subscribers);
     void ReRegisterActiveEventSubscriptions(const std::string& specifier_str);
+    /// \brief Copying gateway, source side: reads the new samples of a forwarded event from its GenericProxy and
+    /// hands their bytes to Transport::ForwardSampleData. Called from the proxy event's receive handler.
+    void ForwardNewSamples(const std::string& specifier_str,
+                           const std::string& element_name,
+                           impl::ServiceElementType element_type);
 
     // Test-only: grant unit-test fixtures access to private members and methods.
     friend class GatewayApplicationSubscriptionTest;

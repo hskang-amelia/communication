@@ -19,7 +19,11 @@
 #include "score/message_passing/unix_domain/unix_domain_server_factory.h"
 #include "score/message_passing/unix_domain/unix_domain_socket_address.h"
 
+#include <cerrno>
+#include <cstdint>
+#include <limits>
 #include <type_traits>
+#include <vector>
 
 namespace score::message_passing
 {
@@ -88,6 +92,22 @@ TEST(UnixDomainServerTest, RunningServersWithNoConnections)
     EXPECT_TRUE(server1->StartListening(connect_callback).has_value());
     EXPECT_TRUE(server2->StartListening(connect_callback).has_value());
     server2->StopListening();
+}
+
+TEST(UnixDomainEngineTest, SendProtocolMessageRejectsPayloadLongerThanLengthField)
+{
+    ::testing::Test::RecordProperty("given", "a running UnixDomainEngine");
+    UnixDomainEngine engine{score::cpp::pmr::get_default_resource()};
+    const std::vector<std::uint8_t> message(static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()) + 1U);
+
+    ::testing::Test::RecordProperty("when", "a payload one byte longer than the 16-bit frame length field is sent");
+    // fd -1: if the size check were missing, sendmsg would be reached and fail with EBADF instead.
+    const auto result =
+        engine.SendProtocolMessage(-1, 0U, score::cpp::span<const std::uint8_t>{message.data(), message.size()});
+
+    ::testing::Test::RecordProperty("then", "it is rejected with ``EMSGSIZE`` before anything is written");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().GetOsDependentErrorCode(), EMSGSIZE);
 }
 
 #ifndef __QNX__  // for some reason, QNX allows both instances to listen

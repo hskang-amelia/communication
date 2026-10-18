@@ -26,6 +26,7 @@ cc_library(
         "//score/mw/com/gateway:__subpackages__",
     ],
     deps = [
+        ":transport_error",
         "//score/mw/com:types",
         "//score/mw/com/impl:service_element_type",
         "@score_baselibs//score/result",

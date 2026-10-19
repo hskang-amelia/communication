@@ -153,7 +153,8 @@ std::uint32_t RpcChannel::NextSequence() noexcept
 
 ChannelStatus RpcChannel::PublishBuffer(const std::vector<std::uint8_t>& buffer)
 {
-    std::lock_guard<std::mutex> lock{publish_mutex_};
+    // IMessageBus::Publish is thread-safe. No lock here: Acks are published from the middleware's receive callback,
+    // which may hold a middleware lock that a concurrent Publish() needs.
     return (bus_.Publish(buffer.data(), buffer.size()) == BusStatus::kOk) ? ChannelStatus::kOk
                                                                           : ChannelStatus::kPublishFailed;
 }

@@ -159,7 +159,6 @@ class RpcChannel
 
     std::atomic<bool> running_{false};
     std::atomic<std::uint32_t> next_sequence_{1U};
-    std::mutex publish_mutex_;
 
     // Pending requests waiting for their Ack, keyed by sequence.
     std::mutex pending_mutex_;

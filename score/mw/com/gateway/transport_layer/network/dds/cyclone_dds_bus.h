@@ -18,6 +18,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -53,7 +55,10 @@ class CycloneDdsBus final : public IMessageBus
     std::int32_t writer_{0};
 
     std::mutex lifecycle_mutex_;
+    // Guards writer_ and publishes_in_flight_. Not held during a write, see Publish().
     std::mutex publish_mutex_;
+    std::condition_variable publish_cv_;
+    std::size_t publishes_in_flight_{0U};
     std::mutex callback_mutex_;
     std::atomic<bool> open_{false};
 };

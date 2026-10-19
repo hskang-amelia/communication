@@ -36,6 +36,7 @@ cc_library(
     deps = [
         ":zenoh_pico_bus_config",
         "//score/mw/com/gateway/transport_layer/network:network_core",
+        "@score_baselibs//score/mw/log",
         "@zenoh_pico//:zenohpico",
     ],
 )

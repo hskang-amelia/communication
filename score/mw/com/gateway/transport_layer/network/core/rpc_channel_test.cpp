@@ -336,6 +336,8 @@ TEST_F(RpcChannelTest, FullDispatchQueueDefersRequestUntilDrained)
     EXPECT_EQ(request.get(), ChannelStatus::kOk);
     ASSERT_TRUE(recorder_b_.WaitFor(3U));
     EXPECT_TRUE(std::holds_alternative<OfferService>(recorder_b_.Frames()[2].body));
+    // The dispatcher holds gate_mutex until it returns.
+    b_->Stop();
 }
 
 TEST_F(RpcChannelTest, ConcurrentSendersAllSucceed)
@@ -412,11 +414,13 @@ TEST_F(RpcChannelTest, StopFromDispatcherThenRestartWorks)
 
 TEST_F(RpcChannelTest, ResultOfTheRequestIsReturnedToTheCaller)
 {
+    std::atomic<int> answered{0};
     ASSERT_EQ(a_->Start([](const Frame&) {}), ChannelStatus::kOk);
-    ASSERT_EQ(b_->Start([this](const Frame& frame) {
+    ASSERT_EQ(b_->Start([this, &answered](const Frame& frame) {
         const auto status =
             std::holds_alternative<ProvideService>(frame.body) ? RequestStatus::kRejected : RequestStatus::kFailed;
         EXPECT_EQ(b_->SendResult(frame.header, status), ChannelStatus::kOk);
+        ++answered;
     }),
               ChannelStatus::kOk);
 
@@ -427,6 +431,13 @@ TEST_F(RpcChannelTest, ResultOfTheRequestIsReturnedToTheCaller)
     EXPECT_EQ(status, RequestStatus::kFailed);
     // Results are consumed by the channel, never dispatched.
     EXPECT_EQ(a_->Statistics().requests_dispatched, 0U);
+    // The caller returns before b_ has the Ack of the last result.
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while ((answered.load() < 2) && (std::chrono::steady_clock::now() < deadline))
+    {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(answered.load(), 2);
 }
 
 TEST_F(RpcChannelTest, NoResultWhenPeerNeverAnswers)
@@ -510,6 +521,8 @@ TEST_F(RpcChannelTest, ResultArrivesWhileLocalDispatcherIsBlocked)
         open_gate = true;
     }
     gate_cv.notify_all();
+    // The dispatcher uses the locals above until it returns from the wait.
+    a_->Stop();
 }
 
 TEST_F(RpcChannelTest, StopUnblocksCallerWaitingForResult)
@@ -535,13 +548,15 @@ TEST_F(RpcChannelTest, BothSidesWaitingForResultsDoNotDeadlock)
 {
     // Each side requests from the other at the same time; each dispatcher sends a nested request back before it
     // answers, like the destination gateway re-registering notifications while handling ProvideService.
-    const auto dispatcher = [](std::unique_ptr<RpcChannel>& self) {
-        return [&self](const Frame& frame) {
+    std::atomic<int> answered{0};
+    const auto dispatcher = [&answered](std::unique_ptr<RpcChannel>& self) {
+        return [&self, &answered](const Frame& frame) {
             if (std::holds_alternative<ProvideService>(frame.body))
             {
                 EXPECT_EQ(self->SendRequest(RegisterNotification{{"svc", WireElementKind::kEvent, "e"}}),
                           ChannelStatus::kOk);
                 EXPECT_EQ(self->SendResult(frame.header, RequestStatus::kOk), ChannelStatus::kOk);
+                ++answered;
             }
         };
     };
@@ -573,6 +588,14 @@ TEST_F(RpcChannelTest, BothSidesWaitingForResultsDoNotDeadlock)
     ASSERT_EQ(from_b.wait_for(5s), std::future_status::ready);
     EXPECT_EQ(from_a.get(), kRounds);
     EXPECT_EQ(from_b.get(), kRounds);
+    // A caller returns when the result arrives, before the answering side has its Ack: let the last SendResult
+    // finish before the channels are stopped.
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while ((answered.load() < 2 * kRounds) && (std::chrono::steady_clock::now() < deadline))
+    {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(answered.load(), 2 * kRounds);
 }
 
 TEST(RpcChannelSessionTest, GeneratedSessionIdsAreNonZeroAndDistinct)

@@ -45,6 +45,8 @@ using namespace std::chrono_literals;
 
 const std::string kInstanceSpecifier{"score/cp60/MapApiLanesStamped"};
 constexpr std::size_t kSampleSubscriptionCount{3U};
+// MapApiLanesStamped is several MB large: keep it in static storage (a stack instance overflows the stack).
+const MapApiLanesStamped kSample{};
 
 score::mw::com::InstanceSpecifier MakeSpecifier()
 {
@@ -143,11 +145,10 @@ int ProbeReceiveHandlerSerialization()
         return EXIT_FAILURE;
     }
 
-    const MapApiLanesStamped sample{};
     int send_errors = 0;
     for (int i = 0; i < 300; ++i)
     {
-        if (!skeleton->map_api_lanes_stamped_.Send(sample).has_value())
+        if (!skeleton->map_api_lanes_stamped_.Send(kSample).has_value())
         {
             ++send_errors;
         }
@@ -185,10 +186,9 @@ int ProbeReentrancy()
     std::atomic<long> calls{0};
     std::vector<std::thread> threads;
     threads.emplace_back([&]() {
-        const MapApiLanesStamped sample{};
-        while (!stop)
+            while (!stop)
         {
-            score::cpp::ignore = skeleton->map_api_lanes_stamped_.Send(sample);
+            score::cpp::ignore = skeleton->map_api_lanes_stamped_.Send(kSample);
             std::this_thread::sleep_for(1ms);
         }
     });

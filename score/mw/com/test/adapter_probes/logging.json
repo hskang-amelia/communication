@@ -1,0 +1,8 @@
+{
+    "appId": "ADPR",
+    "appDesc": "adapter_probes",
+    "logLevel": "kDebug",
+    "logLevelThresholdConsole": "kDebug",
+    "logMode": "kConsole",
+    "dynamicDatarouterIdentifiers": true
+}

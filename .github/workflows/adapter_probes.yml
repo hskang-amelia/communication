@@ -52,14 +52,18 @@ jobs:
       - name: Report results as annotations
         if: always()
         run: |
-          grep -rhoE "PROBE_RESULT .*" bazel-testlogs/ bazel_test_output.txt 2>/dev/null | sort -u | while read -r line; do
-            echo "::notice title=probe::${line}"
-          done
-          grep -E "^//[^ ]+ +.*(PASSED|FAILED|NO STATUS|FLAKY|TIMEOUT)" bazel_test_output.txt | sed -E 's/ +/ /g' | while read -r line; do
-            echo "::notice title=test::TEST ${line}"
-          done
-          grep -E "ERROR: .*(error|failed)" bazel_test_output.txt | head -20 | while read -r line; do
-            echo "::warning title=bazel::${line}"
+          # GitHub keeps at most 10 annotations per type and step, so results are aggregated.
+          enc() { sed -e 's/\x1b\[[0-9;]*m//g' | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g'; }
+          probes=$(grep -rhoE "PROBE_(RESULT|INFO) .*" bazel-testlogs/ bazel_test_output.txt 2>/dev/null | sort -u | enc)
+          echo "::notice title=probes::${probes:-none}"
+          tests=$(sed -e 's/\x1b\[[0-9;]*m//g' bazel_test_output.txt | grep -E "^//[^ ]+ +.*(PASSED|FAILED|NO STATUS|FLAKY|TIMEOUT|SKIPPED)" | sed -E 's/ +/ /g' | enc)
+          echo "::notice title=tests::${tests:-none}"
+          errs=$(sed -e 's/\x1b\[[0-9;]*m//g' bazel_test_output.txt | grep -E "^ERROR: " | head -15 | enc)
+          [ -n "$errs" ] && echo "::warning title=bazel-errors::${errs}"
+          sed -e 's/\x1b\[[0-9;]*m//g' bazel_test_output.txt | grep -E "^//[^ ]+ +.*(FAILED|NO STATUS|TIMEOUT|FLAKY)" | awk '{print $1}' | head -8 | while read -r t; do
+            p="${t#//}"; p="${p/://}"
+            log=$(ls -t bazel-testlogs/${p}/test.log bazel-testlogs/${p}/run_*/test.log bazel-testlogs/${p}/shard_*/test.log 2>/dev/null | head -1)
+            [ -n "$log" ] && echo "::warning title=${t}::$(tail -c 3500 "$log" | enc)"
           done
           echo "bazel exit outcome: ${{ steps.run-tests.outcome }}"
 

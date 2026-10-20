@@ -16,6 +16,7 @@
 #include "score/language/safecpp/scoped_function/move_only_scoped_function.h"
 
 #include "score/mw/com/gateway/gateway_application/gateway_error.h"
+#include "score/mw/com/gateway/transport_layer/transport_error.h"
 #include "score/mw/com/gateway/transport_layer/transport_factory.h"
 #include "score/mw/log/logging.h"
 #include <score/assert.hpp>
@@ -131,33 +132,36 @@ score::Result<void> GatewayApplication::StartServiceDiscovery()
 void GatewayApplication::OnServiceAvailabilityChanged(const std::string& specifier_str,
                                                       std::vector<score::mw::com::HandleType> handles)
 {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (handles.empty())
     {
-        score::mw::log::LogInfo() << "GatewayApplication: Service disappeared: " << specifier_str;
-        OnServiceUnavailable(specifier_str);
-        return;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (handles.empty())
+        {
+            score::mw::log::LogInfo() << "GatewayApplication: Service disappeared: " << specifier_str;
+            OnServiceUnavailable(specifier_str);
+            return;
+        }
+
+        if (proxies_.count(specifier_str) > 0U)
+        {
+            // Proxy kept alive from a previous cycle (see OnServiceUnavailable). Re-propagate so
+            // the remote gateway recreates its skeleton.
+            score::mw::log::LogInfo() << "GatewayApplication: Service re-found, re-propagating: " << specifier_str;
+        }
+        else
+        {
+            score::mw::log::LogInfo() << "GatewayApplication: Service found: " << specifier_str;
+
+            auto proxy_result = score::mw::com::GenericProxy::Create(std::move(handles.front()));
+            if (!proxy_result.has_value())
+            {
+                score::mw::log::LogError() << "GatewayApplication: Failed to create proxy for " << specifier_str;
+                return;
+            }
+
+            proxies_.emplace(specifier_str, std::move(proxy_result).value());
+        }
     }
-
-    if (proxies_.count(specifier_str) > 0U)
-    {
-        // Proxy kept alive from a previous cycle (see OnServiceUnavailable). Re-propagate so
-        // the remote gateway recreates its skeleton.
-        score::mw::log::LogInfo() << "GatewayApplication: Service re-found, re-propagating: " << specifier_str;
-        PropagateService(specifier_str);
-        return;
-    }
-
-    score::mw::log::LogInfo() << "GatewayApplication: Service found: " << specifier_str;
-
-    auto proxy_result = score::mw::com::GenericProxy::Create(std::move(handles.front()));
-    if (!proxy_result.has_value())
-    {
-        score::mw::log::LogError() << "GatewayApplication: Failed to create proxy for " << specifier_str;
-        return;
-    }
-
-    proxies_.emplace(specifier_str, std::move(proxy_result).value());
+    // Outside of mutex_, see PropagateService.
     PropagateService(specifier_str);
 }
 
@@ -188,6 +192,7 @@ void GatewayApplication::OnServiceUnavailable(const std::string& specifier_str)
 
 void GatewayApplication::PropagateService(const std::string& specifier_str)
 {
+    std::unique_lock<std::recursive_mutex> lock(mutex_);
     const auto proxy_it = proxies_.find(specifier_str);
 
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(proxy_it != proxies_.cend(),
@@ -209,7 +214,20 @@ void GatewayApplication::PropagateService(const std::string& specifier_str)
             event_name, score::mw::com::impl::DataTypeMetaInfo{sample_size_info.Size(), sample_size_info.Alignment()}});
     }
 
+    // A transport may wait for the destination's result here. mutex_ is released meanwhile: the transport's own
+    // inbound requests (e.g. the peer providing a service to this gateway at the same time) may need it to complete,
+    // and the peer may be waiting for those before it answers. Only this discovery callback adds or erases proxies.
+    lock.unlock();
     auto provide_result = transport_layer_->ProvideService(std::move(specifier_result).value(), std::move(elements));
+    lock.lock();
+    if (!provide_result.has_value() && (provide_result.error() == TransportErrorc::kRejectedByPeer))
+    {
+        // Permanent (e.g. type id check or expected-received-services at the destination): keep the proxy, so the
+        // service is only proposed again when it is re-found.
+        score::mw::log::LogError() << "GatewayApplication: Destination gateway rejected " << specifier_str
+                                   << ", check the configuration of both gateways";
+        return;
+    }
     if (!provide_result.has_value())
     {
         score::mw::log::LogError() << "GatewayApplication: ProvideService failed for " << specifier_str

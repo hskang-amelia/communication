@@ -18,7 +18,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -47,15 +49,19 @@ class ZenohPicoBus final : public IMessageBus
     friend struct ZenohPicoBusAccess;
 
     void Deliver(const std::uint8_t* data, std::size_t size);
-    BusStatus TryOpenOnce(Handles& handles);
+    // Opens the session, the step Open() retries while the peer is not reachable. Returns the zenoh-pico result.
+    std::int32_t OpenSession(Handles& handles);
+    BusStatus DeclareEntities(Handles& handles);
 
     const ZenohPicoBusConfig config_;
     FrameHandler on_frame_;
     std::unique_ptr<Handles> handles_;
     // Serializes Open/Close.
     std::mutex lifecycle_mutex_;
-    // Guards the publisher handle against Close().
+    // Guards handles_ and publishes_in_flight_. Not held during a put, see Publish().
     std::mutex publish_mutex_;
+    std::condition_variable publish_cv_;
+    std::size_t publishes_in_flight_{0U};
     // Held while the frame handler runs, so Close() can wait for an in-flight callback.
     std::mutex callback_mutex_;
     std::atomic<bool> open_{false};

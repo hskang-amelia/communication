@@ -38,11 +38,17 @@ TEST(TypeIdCheckTest, MismatchIsRejectedUnderEveryPolicy)
 
 TEST(TypeIdCheckTest, MissingIdsDependOnPolicy)
 {
-    for (const auto verdict : {TypeIdVerdict::kMissingLocal, TypeIdVerdict::kMissingRemote, TypeIdVerdict::kMissingBoth})
+    for (const auto verdict :
+         {TypeIdVerdict::kMissingLocal, TypeIdVerdict::kMissingRemote, TypeIdVerdict::kMissingBoth})
     {
         EXPECT_TRUE(IsAccepted(verdict, TypeIdPolicy::kWarn)) << ToString(verdict);
         EXPECT_FALSE(IsAccepted(verdict, TypeIdPolicy::kStrict)) << ToString(verdict);
     }
+}
+
+TEST(TypeIdCheckTest, DefaultPolicyIsStrict)
+{
+    EXPECT_EQ(TypeIdConfig{}.policy, TypeIdPolicy::kStrict);
 }
 
 TEST(TypeIdCheckTest, FindReturnsEmptyForUnknownEntries)

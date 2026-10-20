@@ -15,6 +15,7 @@
 #include "score/memory/data_type_size_info.h"
 #include "score/mw/com/gateway/gateway_application/configuration/gateway_configuration.h"
 #include "score/mw/com/gateway/gateway_application/gateway_error.h"
+#include "score/mw/com/gateway/transport_layer/transport_error.h"
 #include "score/mw/com/gateway/transport_layer/transport_mock.h"
 #include "score/mw/com/impl/bindings/mock_binding/sample_allocatee_ptr.h"
 #include "score/mw/com/impl/bindings/mock_binding/skeleton.h"
@@ -815,6 +816,10 @@ class GatewayApplicationFlowTest : public ::testing::Test
     {
         app_->PropagateService(specifier);
     }
+    bool HasProxy(const std::string& specifier) const
+    {
+        return app_->proxies_.count(specifier) > 0U;
+    }
 
     // Moves the proxy stored under `from` to the key `to`, keeping the same GenericProxy instance.
     // Used to place a valid proxy under a specifier string that InstanceSpecifier::Create rejects.
@@ -947,6 +952,22 @@ TEST_F(GatewayApplicationFlowTest, PropagateServiceFailureErasesProxy)
     // When the service is found (ProvideService fails so proxy is erased) and then found again
     // Then a brand new proxy is created and ProvideService retried.
     FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
+    FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
+}
+
+TEST_F(GatewayApplicationFlowTest, PropagateServiceRejectedByPeerKeepsProxy)
+{
+    // Given discovery started and the destination rejects ProvideService permanently
+    StartAndCaptureFindHandler();
+    EXPECT_CALL(*transport_mock_, ProvideService(::testing::_, ::testing::_))
+        .WillOnce(::testing::Return(score::MakeUnexpected(TransportErrorc::kRejectedByPeer)))
+        .WillOnce(::testing::Return(score::Result<void>{}));
+
+    // When the service is found
+    FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
+
+    // Then the proxy is kept (no retry by re-creating it) and the service is proposed again when re-found.
+    EXPECT_TRUE(HasProxy("svc/a"));
     FireServiceDiscovery(impl::ServiceHandleContainer<impl::HandleType>{MakeProxyHandle({"EventA"})});
 }
 

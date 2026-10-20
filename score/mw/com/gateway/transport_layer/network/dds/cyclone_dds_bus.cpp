@@ -44,6 +44,10 @@ constexpr std::size_t kTakeBatch{16U};
 dds_qos_t* CreateQos(const CycloneDdsBusConfig& config)
 {
     dds_qos_t* const qos = dds_create_qos();
+    if (qos == nullptr)
+    {
+        return nullptr;
+    }
     dds_qset_reliability(qos, DDS_RELIABILITY_RELIABLE, DDS_MSECS(config.max_blocking_time.count()));
     dds_qset_durability(qos, DDS_DURABILITY_VOLATILE);
     dds_qset_history(qos, DDS_HISTORY_KEEP_LAST, config.history_depth);
@@ -122,24 +126,28 @@ BusStatus CycloneDdsBus::Open(FrameHandler on_frame)
         on_frame_ = std::move(on_frame);
     }
 
+    const auto fail = [this]() {
+        ReleaseEntities();
+        return BusStatus::kOpenFailed;
+    };
+
     const auto domain_id = static_cast<dds_domainid_t>(config_.domain_id);
     if (!config_.cyclone_config_xml.empty())
     {
-        domain_ = dds_create_domain(domain_id, config_.cyclone_config_xml.c_str());
-        if (domain_ < 0)
+        const dds_entity_t domain = dds_create_domain(domain_id, config_.cyclone_config_xml.c_str());
+        if (domain < 0)
         {
-            domain_ = 0;
             return BusStatus::kOpenFailed;
         }
+        domain_ = domain;
     }
 
-    participant_ = dds_create_participant(domain_id, nullptr, nullptr);
-    if (participant_ < 0)
+    const dds_entity_t participant = dds_create_participant(domain_id, nullptr, nullptr);
+    if (participant < 0)
     {
-        participant_ = 0;
-        ReleaseEntities();
-        return BusStatus::kOpenFailed;
+        return fail();
     }
+    participant_ = participant;
 
     const dds_entity_t local_topic =
         dds_create_topic(participant_, &score_gateway_Frame_desc, config_.local_topic.c_str(), nullptr, nullptr);
@@ -147,29 +155,45 @@ BusStatus CycloneDdsBus::Open(FrameHandler on_frame)
         dds_create_topic(participant_, &score_gateway_Frame_desc, config_.remote_topic.c_str(), nullptr, nullptr);
     if ((local_topic < 0) || (remote_topic < 0))
     {
-        ReleaseEntities();
-        return BusStatus::kOpenFailed;
+        return fail();
     }
 
     dds_qos_t* const qos = CreateQos(config_);
+    if (qos == nullptr)
+    {
+        return fail();
+    }
     dds_listener_t* const listener = dds_create_listener(this);
+    if (listener == nullptr)
+    {
+        dds_delete_qos(qos);
+        return fail();
+    }
     dds_lset_data_available(listener, &CycloneDdsBusAccess::OnDataAvailable);
 
-    writer_ = dds_create_writer(participant_, remote_topic, qos, nullptr);
+    const dds_entity_t writer = dds_create_writer(participant_, remote_topic, qos, nullptr);
+    if (writer < 0)
+    {
+        dds_delete_listener(listener);
+        dds_delete_qos(qos);
+        return fail();
+    }
+    {
+        // Set before the reader exists, so a listener can publish (e.g. an Ack) as soon as frames arrive.
+        std::lock_guard<std::mutex> lock{publish_mutex_};
+        writer_ = writer;
+    }
     // open_ must be true before the reader exists, otherwise early frames are discarded.
     open_.store(true);
-    reader_ = dds_create_reader(participant_, local_topic, qos, listener);
+    const dds_entity_t reader = dds_create_reader(participant_, local_topic, qos, listener);
     dds_delete_listener(listener);
     dds_delete_qos(qos);
-
-    if ((writer_ < 0) || (reader_ < 0))
+    if (reader < 0)
     {
         open_.store(false);
-        writer_ = (writer_ < 0) ? 0 : writer_;
-        reader_ = (reader_ < 0) ? 0 : reader_;
-        ReleaseEntities();
-        return BusStatus::kOpenFailed;
+        return fail();
     }
+    reader_ = reader;
 
     if (config_.wait_for_peer.count() > 0)
     {
@@ -188,18 +212,33 @@ BusStatus CycloneDdsBus::Publish(const std::uint8_t* data, std::size_t size)
     {
         return BusStatus::kPublishFailed;
     }
-    std::lock_guard<std::mutex> lock{publish_mutex_};
-    if (!open_.load() || (writer_ <= 0))
+    dds_entity_t writer{0};
     {
-        return BusStatus::kNotOpen;
+        std::lock_guard<std::mutex> lock{publish_mutex_};
+        if (!open_.load() || (writer_ <= 0))
+        {
+            return BusStatus::kNotOpen;
+        }
+        writer = writer_;
+        ++publishes_in_flight_;
     }
+    // Not under publish_mutex_: the listener publishes Acks from Cyclone's receive thread, and a reliable write may
+    // wait for acknowledgements that thread processes. ReleaseEntities() waits for this write.
     score_gateway_Frame frame{};
     // The writer serializes synchronously, so the caller's buffer is borrowed, not copied or released.
     frame.data._buffer = const_cast<std::uint8_t*>(data);
     frame.data._length = static_cast<std::uint32_t>(size);
     frame.data._maximum = static_cast<std::uint32_t>(size);
     frame.data._release = false;
-    return (dds_write(writer_, &frame) == DDS_RETCODE_OK) ? BusStatus::kOk : BusStatus::kPublishFailed;
+    const BusStatus status = (dds_write(writer, &frame) == DDS_RETCODE_OK) ? BusStatus::kOk : BusStatus::kPublishFailed;
+    {
+        std::lock_guard<std::mutex> lock{publish_mutex_};
+        if (--publishes_in_flight_ == 0U)
+        {
+            publish_cv_.notify_all();
+        }
+    }
+    return status;
 }
 
 void CycloneDdsBus::Close()
@@ -219,12 +258,19 @@ void CycloneDdsBus::Close()
     {
         std::lock_guard<std::mutex> lock{callback_mutex_};
     }
-    std::lock_guard<std::mutex> lock{publish_mutex_};
     ReleaseEntities();
 }
 
 void CycloneDdsBus::ReleaseEntities() noexcept
 {
+    {
+        // Called with open_ == false, so no new write starts; wait for writes that started before.
+        std::unique_lock<std::mutex> lock{publish_mutex_};
+        publish_cv_.wait(lock, [this]() {
+            return publishes_in_flight_ == 0U;
+        });
+        writer_ = 0;
+    }
     // Deleting the participant (or domain) deletes all its topics, readers and writers.
     if (participant_ > 0)
     {
@@ -237,7 +283,6 @@ void CycloneDdsBus::ReleaseEntities() noexcept
     participant_ = 0;
     domain_ = 0;
     reader_ = 0;
-    writer_ = 0;
 }
 
 }  // namespace score::mw::com::gateway::network

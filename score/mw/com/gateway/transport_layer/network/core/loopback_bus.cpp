@@ -103,14 +103,14 @@ BusStatus LoopbackBus::Publish(const std::uint8_t* data, std::size_t size)
 
 void LoopbackBus::Enqueue(std::vector<std::uint8_t> frame)
 {
+    std::lock_guard<std::mutex> lock{mutex_};
+    if (!open_)
     {
-        std::lock_guard<std::mutex> lock{mutex_};
-        if (!open_)
-        {
-            return;  // Peer not listening: frame is lost, like on a real network.
-        }
-        inbox_.push_back(std::move(frame));
+        return;  // Peer not listening: frame is lost, like on a real network.
     }
+    inbox_.push_back(std::move(frame));
+    // Notified under the lock: once the frame is handled, the receiving endpoint may be destroyed (Close() needs the
+    // lock first).
     cv_.notify_one();
 }
 

@@ -27,15 +27,15 @@
 ///
 ///   Header (16 bytes): magic u16 | version u8 | kind u8 | session u64 | sequence u32
 ///
-/// Requests (ProvideService .. UnregisterNotification) are acknowledged by an Ack frame. Notifications
-/// (UpdateNotification, EventSample) are fire and forget.
+/// Requests (ProvideService .. UnregisterNotification, RequestResult) are acknowledged by an Ack frame. Notifications
+/// (UpdateNotification, EventSample) are fire and forget. ProvideService and OfferService are answered by a
+/// RequestResult once the receiver has handled them.
 namespace score::mw::com::gateway::network
 {
 
 constexpr std::uint16_t kWireMagic{0x4753U};  // "SG" when read little endian
-/// Version 2 adds EventMeta::type_id to ProvideService. Version 1 frames are still decoded (type_id empty).
-constexpr std::uint8_t kWireVersion{2U};
-constexpr std::uint8_t kMinWireVersion{1U};
+/// Version 3 adds RequestResult. The protocol is pre-release: only frames of this version are decoded.
+constexpr std::uint8_t kWireVersion{3U};
 constexpr std::size_t kHeaderSize{16U};
 constexpr std::size_t kMaxStringLength{0xFFFFU};
 constexpr std::size_t kMaxEventsPerService{0xFFFFU};
@@ -50,6 +50,7 @@ enum class FrameKind : std::uint8_t
     kUpdateNotification = 6U,
     kEventSample = 7U,
     kAck = 8U,
+    kRequestResult = 9U,
 };
 
 /// \brief Service element kind on the wire. Values are part of the protocol and must not change.
@@ -65,7 +66,7 @@ struct EventMeta
     std::string name;
     std::uint64_t size{0U};
     std::uint64_t alignment{0U};
-    /// \brief Opaque identity of the event data type (see TypeIdConfig). Empty: not configured. Since version 2.
+    /// \brief Opaque identity of the event data type (see TypeIdConfig). Empty: not configured.
     std::string type_id{};
 };
 
@@ -124,6 +125,26 @@ struct Ack
     std::uint32_t acked_sequence{0U};
 };
 
+/// \brief Outcome of handling a request at the receiver. Values are part of the protocol and must not change.
+enum class RequestStatus : std::uint8_t
+{
+    kOk = 0U,
+    /// Permanent: the receiver's configuration does not allow the request (e.g. type id check, unknown instance).
+    kRejected = 1U,
+    /// Possibly transient: the receiver's GatewayCore returned an error.
+    kFailed = 2U,
+};
+
+/// \brief Result of the request (request_session, request_sequence), sent by the receiver after dispatching it.
+/// \details Unlike the Ack it reports what the receiver did with the request. It is a request itself (acked, resent
+/// and deduplicated), but handled on reception instead of being dispatched.
+struct RequestResult
+{
+    std::uint64_t request_session{0U};
+    std::uint32_t request_sequence{0U};
+    RequestStatus status{RequestStatus::kOk};
+};
+
 using FrameBody = std::variant<ProvideService,
                                OfferService,
                                StopOfferService,
@@ -131,7 +152,8 @@ using FrameBody = std::variant<ProvideService,
                                UnregisterNotification,
                                UpdateNotification,
                                EventSample,
-                               Ack>;
+                               Ack,
+                               RequestResult>;
 
 struct FrameHeader
 {
@@ -154,6 +176,7 @@ enum class DecodeError : std::uint8_t
     kUnsupportedVersion,
     kUnknownKind,
     kBadElementKind,
+    kBadRequestStatus,
     kTrailingBytes,
 };
 
@@ -195,6 +218,7 @@ DecodeResult Decode(const std::uint8_t* data, std::size_t size);
 
 const char* ToString(DecodeError error) noexcept;
 const char* ToString(EncodeError error) noexcept;
+const char* ToString(RequestStatus status) noexcept;
 
 }  // namespace score::mw::com::gateway::network
 

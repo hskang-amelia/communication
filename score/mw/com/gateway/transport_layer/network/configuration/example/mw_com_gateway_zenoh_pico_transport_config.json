@@ -4,7 +4,7 @@
     "max-attempts": 5
   },
   "type-check": {
-    "policy": "warn",
+    "policy": "strict",
     "type-ids": {
       "/vehicle/drive_mode": {
         "mode": "DriveMode@1.2"

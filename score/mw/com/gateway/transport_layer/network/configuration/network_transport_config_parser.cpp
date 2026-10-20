@@ -12,10 +12,12 @@
  ********************************************************************************/
 #include "score/mw/com/gateway/transport_layer/network/configuration/network_transport_config_parser.h"
 
+#include "score/mw/com/gateway/transport_layer/network/core/wire_format.h"
 #include "score/mw/log/logging.h"
 
 #include <score/assert.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <string>
@@ -32,6 +34,7 @@ constexpr auto kAckTimeoutMsKey = "ack-timeout-ms"sv;
 constexpr auto kMaxAttemptsKey = "max-attempts"sv;
 constexpr auto kDedupeWindowKey = "dedupe-window"sv;
 constexpr auto kMaxDispatchQueueKey = "max-dispatch-queue"sv;
+constexpr auto kResultTimeoutMsKey = "result-timeout-ms"sv;
 
 constexpr auto kTypeCheckKey = "type-check"sv;
 constexpr auto kPolicyKey = "policy"sv;
@@ -105,20 +108,34 @@ void OptionalMs(const score::json::Object& object, std::string_view key, std::ch
 
 void ParseRpc(const score::json::Object& top, RpcChannelConfig& rpc)
 {
-    if (top.find(kRpcKey) == top.cend())
+    bool result_timeout_set{false};
+    if (top.find(kRpcKey) != top.cend())
     {
-        return;
+        const auto& object = ObjectAt(top, kRpcKey);
+        OptionalMs(object, kAckTimeoutMsKey, rpc.ack_timeout);
+        Optional(object, kMaxAttemptsKey, rpc.max_attempts);
+        std::uint32_t dedupe{static_cast<std::uint32_t>(rpc.dedupe_window)};
+        Optional(object, kDedupeWindowKey, dedupe);
+        rpc.dedupe_window = dedupe;
+        std::uint32_t queue{static_cast<std::uint32_t>(rpc.max_dispatch_queue)};
+        Optional(object, kMaxDispatchQueueKey, queue);
+        rpc.max_dispatch_queue = queue;
+        result_timeout_set = (object.find(kResultTimeoutMsKey) != object.cend());
+        OptionalMs(object, kResultTimeoutMsKey, rpc.result_timeout);
+        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.ack_timeout.count() > 0, "rpc.ack-timeout-ms must be > 0");
+        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_attempts > 0U, "rpc.max-attempts must be > 0");
+        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.dedupe_window > 0U, "rpc.dedupe-window must be > 0");
+        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_dispatch_queue > 0U, "rpc.max-dispatch-queue must be > 0");
     }
-    const auto& object = ObjectAt(top, kRpcKey);
-    OptionalMs(object, kAckTimeoutMsKey, rpc.ack_timeout);
-    Optional(object, kMaxAttemptsKey, rpc.max_attempts);
-    std::uint32_t dedupe{static_cast<std::uint32_t>(rpc.dedupe_window)};
-    Optional(object, kDedupeWindowKey, dedupe);
-    rpc.dedupe_window = dedupe;
-    std::uint32_t queue{static_cast<std::uint32_t>(rpc.max_dispatch_queue)};
-    Optional(object, kMaxDispatchQueueKey, queue);
-    rpc.max_dispatch_queue = queue;
-    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.max_attempts > 0U, "rpc.max-attempts must be > 0");
+    // The result is itself acked and resent, so waiting for it has to cover at least one retry budget. Without an
+    // explicit value the default grows to twice the budget when the retry settings need more.
+    const auto retry_budget = rpc.ack_timeout * rpc.max_attempts;
+    if (!result_timeout_set)
+    {
+        rpc.result_timeout = std::max(rpc.result_timeout, 2 * retry_budget);
+    }
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(rpc.result_timeout >= retry_budget,
+                                                "rpc.result-timeout-ms must be >= ack-timeout-ms * max-attempts");
 }
 
 void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
@@ -128,7 +145,7 @@ void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
         return;
     }
     const auto& object = ObjectAt(top, kTypeCheckKey);
-    std::string policy{"warn"};
+    std::string policy{"strict"};
     OptionalString(object, kPolicyKey, policy);
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE((policy == "warn") || (policy == "strict"),
                                                 "type-check.policy must be \"warn\" or \"strict\"");
@@ -148,6 +165,8 @@ void ParseTypeCheck(const score::json::Object& top, TypeIdConfig& config)
             const auto type_id = event_value.As<std::string>();
             SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(type_id.has_value() && !type_id.value().get().empty(),
                                                         "type-check.type-ids values must be non-empty strings");
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(type_id.value().get().size() <= kMaxStringLength,
+                                                        "type-check.type-ids values must not exceed 65535 bytes");
             target[std::string{event_key.GetAsStringView()}] = type_id.value().get();
         }
     }
@@ -169,6 +188,10 @@ void ParseZenohPico(const score::json::Object& top, ZenohPicoBusConfig& config)
                                                 "zenoh-pico.mode must be \"peer\" or \"client\"");
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(!config.connect.empty() || !config.listen.empty(),
                                                 "zenoh-pico needs a connect or listen endpoint");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.local_key != config.remote_key,
+                                                "zenoh-pico.local-key and remote-key must differ");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.max_frame_size >= 64U,
+                                                "zenoh-pico.max-frame-size must be >= 64");
 }
 
 void ParseCycloneDds(const score::json::Object& top, CycloneDdsBusConfig& config)
@@ -181,6 +204,10 @@ void ParseCycloneDds(const score::json::Object& top, CycloneDdsBusConfig& config
     OptionalMs(object, kMaxBlockingTimeMsKey, config.max_blocking_time);
     OptionalString(object, kConfigXmlKey, config.cyclone_config_xml);
     OptionalMs(object, kWaitForPeerMsKey, config.wait_for_peer);
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.local_topic != config.remote_topic,
+                                                "cyclone-dds.local-topic and remote-topic must differ");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.domain_id <= 232U, "cyclone-dds.domain-id must be <= 232");
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(config.history_depth > 0, "cyclone-dds.history-depth must be > 0");
 }
 
 }  // namespace
@@ -192,9 +219,9 @@ NetworkTransportConfig ParseNetworkTransportConfig(std::string_view path, Networ
     auto json_result = json_parser_obj.FromFile(path);
     if (!json_result.has_value())
     {
-        ::score::mw::log::LogFatal("lola") << "Parsing network transport config file" << path
-                                           << "failed with error:" << json_result.error().Message() << ": "
-                                           << json_result.error().UserMessage() << " . Terminating.";
+        ::score::mw::log::LogFatal("lola")
+            << "Parsing network transport config file" << path << "failed with error:" << json_result.error().Message()
+            << ": " << json_result.error().UserMessage() << " . Terminating.";
         std::terminate();
     }
     return ParseNetworkTransportConfig(std::move(json_result).value(), backend);

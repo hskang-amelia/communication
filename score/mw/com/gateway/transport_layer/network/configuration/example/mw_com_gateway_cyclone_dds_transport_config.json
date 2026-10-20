@@ -3,6 +3,13 @@
     "ack-timeout-ms": 200,
     "max-attempts": 10
   },
+  "type-check": {
+    "type-ids": {
+      "/vehicle/drive_mode": {
+        "mode": "DriveMode@1.2"
+      }
+    }
+  },
   "cyclone-dds": {
     "domain-id": 0,
     "local-topic": "score_gateway_hpc",

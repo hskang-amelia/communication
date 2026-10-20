@@ -87,6 +87,16 @@ TEST_F(TransportErrorTest, MessageForReceiveFailure)
     TestErrorMessage(TransportErrorc::kReceiveFailure, "Failed to receive message.");
 }
 
+TEST_F(TransportErrorTest, MessageForRejectedByPeer)
+{
+    TestErrorMessage(TransportErrorc::kRejectedByPeer, "Request rejected by the peer.");
+}
+
+TEST_F(TransportErrorTest, MessageForPeerRequestFailed)
+{
+    TestErrorMessage(TransportErrorc::kPeerRequestFailed, "Request not completed by the peer.");
+}
+
 TEST_F(TransportErrorTest, MessageForDefault)
 {
     TestErrorMessage(static_cast<TransportErrorc>(-1), "unknown transport error");

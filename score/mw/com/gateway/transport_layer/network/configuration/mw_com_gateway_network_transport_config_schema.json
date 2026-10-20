@@ -7,23 +7,24 @@
     "properties": {
         "rpc": {
             "title": "Request delivery",
-            "description": "Ack, retry and dispatch settings shared by all network backends.",
+            "description": "Ack, retry, dispatch and request result settings shared by all network backends.",
             "type": "object",
             "additionalProperties": false,
             "properties": {
                 "ack-timeout-ms": {"type": "integer", "minimum": 1, "default": 200, "description": "Wait for an ack before resending a request."},
                 "max-attempts": {"type": "integer", "minimum": 1, "default": 5, "description": "Sends of one request including the first."},
                 "dedupe-window": {"type": "integer", "minimum": 1, "default": 256, "description": "Recently dispatched request sequences remembered to drop resends."},
-                "max-dispatch-queue": {"type": "integer", "minimum": 1, "default": 1024, "description": "Inbound frames waiting for dispatch."}
+                "max-dispatch-queue": {"type": "integer", "minimum": 1, "default": 1024, "description": "Inbound frames waiting for dispatch."},
+                "result-timeout-ms": {"type": "integer", "minimum": 1, "default": 5000, "description": "Wait for the peer's result of ProvideService/OfferService once the request is acked. Must be >= ack-timeout-ms * max-attempts. If not set: 5000 or twice ack-timeout-ms * max-attempts, whichever is larger."}
             }
         },
         "type-check": {
             "title": "Event type identity check",
-            "description": "Samples are copied in their binary C++ layout and only their size is checked. Type ids let both gateways confirm they use the same type definition. A mismatch always rejects the service at the destination.",
+            "description": "Samples are copied in their binary C++ layout and only their size is checked. Type ids let both gateways confirm they use the same type definition. A mismatch always rejects the service at the destination, which reports the rejection to the source.",
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "policy": {"type": "string", "enum": ["warn", "strict"], "default": "warn", "description": "warn: a missing type id is logged and accepted. strict: every event needs the same type id on both sides."},
+                "policy": {"type": "string", "enum": ["warn", "strict"], "default": "strict", "description": "strict: every event needs the same type id on both sides. warn (development only): a missing type id is logged and accepted."},
                 "type-ids": {
                     "type": "object",
                     "description": "Instance specifier -> event name -> opaque type id (e.g. \"DriveMode@1.2\" or a hash of the generated type definition).",

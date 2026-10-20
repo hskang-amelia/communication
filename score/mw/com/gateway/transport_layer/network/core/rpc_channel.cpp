@@ -51,6 +51,8 @@ const char* ToString(ChannelStatus status) noexcept
             return "bus publish failed";
         case ChannelStatus::kTimeout:
             return "no ack received";
+        case ChannelStatus::kNoResult:
+            return "no request result received";
         default:
             return "unknown channel status";
     }
@@ -118,6 +120,10 @@ void RpcChannel::Stop()
         std::lock_guard<std::mutex> lock{pending_mutex_};
         pending_cv_.notify_all();
     }
+    {
+        std::lock_guard<std::mutex> lock{results_mutex_};
+        results_cv_.notify_all();
+    }
     if (was_running)
     {
         bus_.Close();
@@ -147,9 +153,10 @@ std::uint32_t RpcChannel::NextSequence() noexcept
 
 ChannelStatus RpcChannel::PublishBuffer(const std::vector<std::uint8_t>& buffer)
 {
-    std::lock_guard<std::mutex> lock{publish_mutex_};
+    // IMessageBus::Publish is thread-safe. No lock here: Acks are published from the middleware's receive callback,
+    // which may hold a middleware lock that a concurrent Publish() needs.
     return (bus_.Publish(buffer.data(), buffer.size()) == BusStatus::kOk) ? ChannelStatus::kOk
-                                                                           : ChannelStatus::kPublishFailed;
+                                                                          : ChannelStatus::kPublishFailed;
 }
 
 ChannelStatus RpcChannel::SendRequest(const FrameBody& body)
@@ -158,7 +165,51 @@ ChannelStatus RpcChannel::SendRequest(const FrameBody& body)
     {
         return ChannelStatus::kNotStarted;
     }
+    return SendSequencedRequest(NextSequence(), body);
+}
+
+ChannelStatus RpcChannel::SendRequestForResult(const FrameBody& body, RequestStatus& status)
+{
+    if (!running_.load())
+    {
+        return ChannelStatus::kNotStarted;
+    }
     const std::uint32_t sequence = NextSequence();
+    {
+        // Registered before sending: the result can be received before this thread has seen the Ack.
+        std::lock_guard<std::mutex> lock{results_mutex_};
+        awaited_results_[sequence] = std::nullopt;
+    }
+
+    ChannelStatus result = SendSequencedRequest(sequence, body);
+
+    std::unique_lock<std::mutex> lock{results_mutex_};
+    if (result == ChannelStatus::kOk)
+    {
+        static_cast<void>(results_cv_.wait_for(lock, config_.result_timeout, [this, sequence]() {
+            return awaited_results_[sequence].has_value() || !running_.load();
+        }));
+        const auto& received = awaited_results_[sequence];
+        if (received.has_value())
+        {
+            status = received.value();
+        }
+        else
+        {
+            result = running_.load() ? ChannelStatus::kNoResult : ChannelStatus::kNotStarted;
+        }
+    }
+    awaited_results_.erase(sequence);
+    return result;
+}
+
+ChannelStatus RpcChannel::SendResult(const FrameHeader& request, RequestStatus status)
+{
+    return SendRequest(RequestResult{request.session, request.sequence, status});
+}
+
+ChannelStatus RpcChannel::SendSequencedRequest(std::uint32_t sequence, const FrameBody& body)
+{
     std::vector<std::uint8_t> buffer{};
     EncodeError encode_error{EncodeError::kNone};
     if (!Encode(FrameHeader{KindOf(body), session_id_, sequence}, body, buffer, encode_error))
@@ -273,6 +324,7 @@ void RpcChannel::OnFrame(const std::uint8_t* data, std::size_t size)
     }
 
     const bool needs_ack = RequiresAck(frame.header.kind);
+    const auto* const result = std::get_if<RequestResult>(&frame.body);
     std::lock_guard<std::mutex> dedupe_lock{dedupe_mutex_};
     if (needs_ack && IsDuplicate(frame.header.session, frame.header.sequence))
     {
@@ -284,6 +336,7 @@ void RpcChannel::OnFrame(const std::uint8_t* data, std::size_t size)
     }
 
     const FrameHeader header = frame.header;
+    if (result == nullptr)
     {
         std::lock_guard<std::mutex> lock{queue_mutex_};
         if (queue_.size() >= config_.max_dispatch_queue)
@@ -313,6 +366,13 @@ void RpcChannel::OnFrame(const std::uint8_t* data, std::size_t size)
         // Ack before the frame becomes visible to the dispatcher: a handler may stop the channel (and close the
         // bus) right away, which would otherwise swallow this Ack.
         SendAckFor(header);
+    }
+
+    if (result != nullptr)
+    {
+        // Completed here, not on the dispatch thread: the waiting caller must not depend on the dispatch queue.
+        HandleResult(*result);
+        return;
     }
 
     {
@@ -358,6 +418,24 @@ void RpcChannel::HandleAck(const Ack& ack)
         acked_.insert(ack.acked_sequence);
     }
     pending_cv_.notify_all();
+}
+
+void RpcChannel::HandleResult(const RequestResult& result)
+{
+    if (result.request_session == session_id_)
+    {
+        std::lock_guard<std::mutex> lock{results_mutex_};
+        const auto it = awaited_results_.find(result.request_sequence);
+        if (it != awaited_results_.end())
+        {
+            it->second = result.status;
+            results_cv_.notify_all();
+            return;
+        }
+    }
+    // The caller gave up waiting (kNoResult) or the result belongs to an earlier session of this gateway.
+    std::lock_guard<std::mutex> lock{stats_mutex_};
+    ++stats_.stale_results;
 }
 
 void RpcChannel::DispatchLoop()

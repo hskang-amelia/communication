@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -40,6 +41,8 @@ enum class ChannelStatus : std::uint8_t
     kEncodeFailed,
     kPublishFailed,
     kTimeout,
+    /// The request was acked, but no RequestResult arrived within RpcChannelConfig::result_timeout.
+    kNoResult,
 };
 
 const char* ToString(ChannelStatus status) noexcept;
@@ -54,6 +57,9 @@ struct RpcChannelConfig
     std::size_t dedupe_window{256U};
     /// \brief Inbound frames waiting for dispatch. Further notifications are dropped, requests are not acked.
     std::size_t max_dispatch_queue{1024U};
+    /// \brief Time to wait for the RequestResult of SendRequestForResult() once the request is acked. Covers the
+    /// peer's handling and the delivery of the result, which is itself acked and resent (ack_timeout * max_attempts).
+    std::chrono::milliseconds result_timeout{5000};
 };
 
 struct RpcChannelStatistics
@@ -66,18 +72,23 @@ struct RpcChannelStatistics
     std::uint64_t queue_overflows{0U};
     std::uint64_t retries{0U};
     std::uint64_t stale_acks{0U};
+    std::uint64_t stale_results{0U};
 };
 
 /// \brief Reliable request delivery and in-order dispatch on top of an IMessageBus.
 /// \details
-/// - Requests (ProvideService, OfferService, StopOfferService, (Un)RegisterNotification) are acked by the receiver
-///   on reception and resent until acked (max_attempts). The receiver drops resends it already dispatched.
+/// - Requests (ProvideService, OfferService, StopOfferService, (Un)RegisterNotification, RequestResult) are acked by
+///   the receiver on reception and resent until acked (max_attempts). The receiver drops resends it already handled.
 /// - Notifications (UpdateNotification, EventSample) are sent once.
-/// - Inbound frames are dispatched on a dedicated thread, in arrival order. A handler may call SendRequest()
+/// - Inbound frames other than Ack and RequestResult are dispatched on a dedicated thread, in arrival order. A handler
+/// may call SendRequest()
 ///   (e.g. the destination gateway re-registering notifications while handling ProvideService) without blocking
 ///   Ack reception, because Acks are processed on the middleware receive thread.
-/// - The ack only confirms delivery, not the result of the remote GatewayCore call. This matches the sample
-///   hypervisor transport; remote failures are logged on the remote side.
+/// - The ack only confirms delivery and is sent before the request is dispatched. The outcome of handling a request
+///   is reported separately by the receiver's dispatcher (SendResult()) and awaited by SendRequestForResult().
+///   RequestResult frames are acked and deduplicated like requests, but completed on the receive thread like Acks:
+///   they never wait behind the dispatch queue, so a caller waiting for a result does not depend on the local
+///   dispatch thread.
 class RpcChannel
 {
   public:
@@ -101,6 +112,15 @@ class RpcChannel
     /// \brief Sends a request and blocks until it is acked or all attempts timed out.
     ChannelStatus SendRequest(const FrameBody& body);
 
+    /// \brief Sends a request like SendRequest(), then blocks until the peer reports its RequestResult or
+    /// result_timeout expires (kNoResult). status is only set if kOk is returned.
+    /// \details Must not be called from the dispatcher: the peer may be waiting the same way for a request this
+    /// channel would only dispatch afterwards.
+    ChannelStatus SendRequestForResult(const FrameBody& body, RequestStatus& status);
+
+    /// \brief Reports the outcome of a dispatched request to its sender. Blocks until the result is acked.
+    ChannelStatus SendResult(const FrameHeader& request, RequestStatus status);
+
     /// \brief Sends a notification once, without waiting.
     ChannelStatus SendNotification(const FrameBody& body);
 
@@ -110,7 +130,10 @@ class RpcChannel
                                   const std::uint8_t* data,
                                   std::size_t size);
 
-    std::uint64_t SessionId() const noexcept { return session_id_; }
+    std::uint64_t SessionId() const noexcept
+    {
+        return session_id_;
+    }
 
     RpcChannelStatistics Statistics() const;
 
@@ -121,6 +144,8 @@ class RpcChannel
   private:
     void OnFrame(const std::uint8_t* data, std::size_t size);
     void HandleAck(const Ack& ack);
+    void HandleResult(const RequestResult& result);
+    ChannelStatus SendSequencedRequest(std::uint32_t sequence, const FrameBody& body);
     bool IsDuplicate(std::uint64_t session, std::uint32_t sequence);
     void SendAckFor(const FrameHeader& header);
     ChannelStatus PublishBuffer(const std::vector<std::uint8_t>& buffer);
@@ -134,13 +159,17 @@ class RpcChannel
 
     std::atomic<bool> running_{false};
     std::atomic<std::uint32_t> next_sequence_{1U};
-    std::mutex publish_mutex_;
 
     // Pending requests waiting for their Ack, keyed by sequence.
     std::mutex pending_mutex_;
     std::condition_variable pending_cv_;
     std::unordered_set<std::uint32_t> pending_;
     std::unordered_set<std::uint32_t> acked_;
+
+    // Requests waiting for their RequestResult, keyed by sequence. Empty optional: no result yet.
+    std::mutex results_mutex_;
+    std::condition_variable results_cv_;
+    std::unordered_map<std::uint32_t, std::optional<RequestStatus>> awaited_results_;
 
     // Duplicate detection for inbound requests (remote session + recent sequences).
     std::mutex dedupe_mutex_;

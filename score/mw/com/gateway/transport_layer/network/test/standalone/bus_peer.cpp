@@ -209,8 +209,8 @@ class Event
 
 int RunSource(net::RpcChannel& channel, const Options& options, Event& registered)
 {
-    const auto provide = channel.SendRequest(
-        net::ProvideService{"/test/svc", {{"evt", options.sample_size, 8U, "Evt@1"}, {"large", options.large_size, 8U}}});
+    const auto provide = channel.SendRequest(net::ProvideService{
+        "/test/svc", {{"evt", options.sample_size, 8U, "Evt@1"}, {"large", options.large_size, 8U}}});
     if (provide != net::ChannelStatus::kOk)
     {
         std::printf("RESULT {\"role\":\"source\",\"ok\":false,\"error\":\"provide: %s\"}\n", net::ToString(provide));
@@ -328,8 +328,8 @@ int main(int argc, char** argv)
                              (provide->events[0].type_id == "Evt@1") && provide->events[1].type_id.empty();
             lock.unlock();
             // Nested request while the source is still blocked in SendRequest(ProvideService).
-            const auto nested = channel.SendRequest(net::RegisterNotification{
-                {"/test/svc", net::WireElementKind::kEvent, "evt"}});
+            const auto nested =
+                channel.SendRequest(net::RegisterNotification{{"/test/svc", net::WireElementKind::kEvent, "evt"}});
             lock.lock();
             state.nested = nested;
         }
@@ -382,8 +382,8 @@ int main(int argc, char** argv)
         const double stream_ms =
             std::chrono::duration<double, std::milli>(state.last_sample - state.first_sample).count();
         const bool ok = got_stop && state.provided && (state.nested == net::ChannelStatus::kOk) &&
-                        (state.received == options.samples) && (state.corrupt == 0U) &&
-                        (state.out_of_order == 0U) && state.large_ok && (state.offers == options.probes);
+                        (state.received == options.samples) && (state.corrupt == 0U) && (state.out_of_order == 0U) &&
+                        state.large_ok && (state.offers == options.probes);
         std::printf(
             "RESULT {\"role\":\"destination\",\"ok\":%s,\"received\":%u,\"expected\":%u,\"corrupt\":%u,"
             "\"out_of_order\":%u,\"large_ok\":%s,\"offers\":%u,\"nested\":\"%s\",\"receive_ms\":%.1f,"

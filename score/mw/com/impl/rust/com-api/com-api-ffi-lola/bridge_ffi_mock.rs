@@ -251,6 +251,8 @@ mock! {
             interface_id: &str,
             field_id: &str,
             out_value: *mut u8,
+            size: usize,
+            align: usize,
         ) -> Result<(), i32>;
 
         unsafe fn proxy_field_set(
@@ -260,6 +262,8 @@ mock! {
             field_id: &str,
             in_value: *const u8,
             out_value: *mut u8,
+            size: usize,
+            align: usize,
         ) -> Result<(), i32>;
 
         unsafe fn skeleton_field_update(
@@ -268,6 +272,8 @@ mock! {
             interface_id: &str,
             field_id: &str,
             value: *const u8,
+            size: usize,
+            align: usize,
         ) -> bool;
 
         unsafe fn skeleton_field_register_set_handler(
@@ -276,6 +282,8 @@ mock! {
             interface_id: &str,
             field_id: &str,
             handler: &FatPtr,
+            size: usize,
+            align: usize,
         ) -> bool;
 }
 }
@@ -621,11 +629,13 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         interface_id: &str,
         field_id: &str,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32> {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe {
             self.locked()
-                .proxy_field_get(proxy_ptr, interface_id, field_id, out_value)
+                .proxy_field_get(proxy_ptr, interface_id, field_id, out_value, size, align)
         }
     }
 
@@ -636,11 +646,13 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         field_id: &str,
         in_value: *const u8,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32> {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe {
             self.locked()
-                .proxy_field_set(proxy_ptr, interface_id, field_id, in_value, out_value)
+                .proxy_field_set(proxy_ptr, interface_id, field_id, in_value, out_value, size, align)
         }
     }
 
@@ -650,11 +662,13 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         interface_id: &str,
         field_id: &str,
         value: *const u8,
+        size: usize,
+        align: usize,
     ) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe {
             self.locked()
-                .skeleton_field_update(skeleton_ptr, interface_id, field_id, value)
+                .skeleton_field_update(skeleton_ptr, interface_id, field_id, value, size, align)
         }
     }
 
@@ -664,11 +678,19 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         interface_id: &str,
         field_id: &str,
         handler: &FatPtr,
+        size: usize,
+        align: usize,
     ) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe {
-            self.locked()
-                .skeleton_field_register_set_handler(skeleton_ptr, interface_id, field_id, handler)
+            self.locked().skeleton_field_register_set_handler(
+                skeleton_ptr,
+                interface_id,
+                field_id,
+                handler,
+                size,
+                align,
+            )
         }
     }
 }

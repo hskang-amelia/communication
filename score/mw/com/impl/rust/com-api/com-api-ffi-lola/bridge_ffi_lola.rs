@@ -24,12 +24,13 @@ pub struct LolaFFIBridge;
 /// Flattened FFI-callback signature for a skeleton-method handler: quality type, then optional
 /// `(ptr, len)` pairs for the in-args and return-value buffers. Mirrors
 /// `com-api-runtime-lola::method::BoxedMethodHandlerFn`'s `Box<dyn ...>` payload type — this crate
-/// only ever sees it unboxed, as the `&mut dyn` reconstructed from the `FatPtr` below.
-type MethodHandlerCallback = dyn FnMut(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>);
+/// only ever sees it unboxed, as the `&dyn` reconstructed from the `FatPtr` below. `Fn + Sync`, since C++
+/// may call it from several threads at once.
+type MethodHandlerCallback = dyn Fn(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send + Sync;
 
 /// Field set-handler callback: receives a pointer to the requested value and may replace it in place
 /// with the value to accept. Mirrors `com-api-runtime-lola::field_producer::BoxedFieldSetHandlerFn`.
-type FieldSetHandlerCallback = dyn FnMut(*mut u8);
+type FieldSetHandlerCallback = dyn Fn(*mut u8) + Send + Sync;
 
 /// Called by C++ (`RustBoxedCallable<void>::invoke`) to fire a Rust `FnMut()` receive handler.
 ///
@@ -143,9 +144,9 @@ unsafe extern "C" fn mw_com_impl_call_dyn_ref_fnmut_find_service(
 /// the live `T` the proxy requested; the closure may replace it with the value to accept.
 ///
 /// # Safety
-/// `ptr` must point to a valid `FatPtr` whose payload is a live `Box<dyn FnMut(*mut u8) + Send>` created
-/// by `com-api-runtime-lola`'s `LolaFieldPublisher::register_set_handler`; `value` must point to a live
-/// value of the field's type.
+/// `ptr` must point to a valid `FatPtr` whose payload is a live `Box<dyn Fn(*mut u8) + Send + Sync>`
+/// created by `com-api-runtime-lola`'s `LolaFieldPublisher::register_set_handler`; `value` must point to a
+/// live value of the field's type.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn mw_com_impl_call_field_set_handler(ptr: *const FatPtr, value: *mut u8) {
     if ptr.is_null() || value.is_null() {
@@ -153,7 +154,7 @@ unsafe extern "C" fn mw_com_impl_call_field_set_handler(ptr: *const FatPtr, valu
     }
     // SAFETY: caller guarantees ptr is valid; transmute reconstructs the fat pointer, exactly like
     // mw_com_impl_call_method_handler below.
-    let callable: &mut FieldSetHandlerCallback = unsafe { std::mem::transmute(*ptr) };
+    let callable: &FieldSetHandlerCallback = unsafe { std::mem::transmute(*ptr) };
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callable(value))).is_err() {
         log::error!("Panic caught in mw_com_impl_call_field_set_handler: aborting to prevent unwind across FFI boundary");
         // Abort to prevent a Rust panic from unwinding across the C++ stack boundary.
@@ -167,7 +168,7 @@ unsafe extern "C" fn mw_com_impl_call_field_set_handler(ptr: *const FatPtr, valu
 ///
 /// # Safety
 /// `ptr` must point to a valid `FatPtr` whose payload is a live
-/// `Box<dyn FnMut(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send>` created by
+/// `Box<dyn Fn(u8, Option<(*mut u8, usize)>, Option<(*mut u8, usize)>) + Send + Sync>` created by
 /// `LolaMethodHandler::register_handler` (method.rs). The buffers must be valid for their lengths when
 /// their `_present` flag is true.
 #[unsafe(no_mangle)]
@@ -185,8 +186,9 @@ unsafe extern "C" fn mw_com_impl_call_method_handler(
         return;
     }
     // SAFETY: caller guarantees ptr is valid; transmute reconstructs the fat pointer, exactly like
-    // mw_com_impl_call_dyn_fnmut above but with this method-handler-shaped callback signature.
-    let callable: &mut MethodHandlerCallback = unsafe { std::mem::transmute(*ptr) };
+    // mw_com_impl_call_dyn_fnmut above but with this method-handler-shaped callback signature. Only a
+    // shared reference is formed, as concurrent calls may share the closure.
+    let callable: &MethodHandlerCallback = unsafe { std::mem::transmute(*ptr) };
     let in_args = if in_args_present {
         Some((in_args_data, in_args_len))
     } else {
@@ -556,12 +558,14 @@ unsafe extern "C" {
     // --- Field get/set/update FFI (registry_bridge_macro.cpp).
 
     /// Call a field getter; on success writes the value into `out_value`, on failure the error code
-    /// into `*out_error`.
+    /// into `*out_error`. `size`/`align` are checked against the C++ field type.
     fn mw_com_proxy_field_get(
         proxy_ptr: *mut ProxyBase,
         interface_id: StringView,
         field_id: StringView,
         out_value: *mut std::ffi::c_void,
+        size: usize,
+        align: usize,
         out_error: *mut i32,
     ) -> bool;
 
@@ -572,6 +576,8 @@ unsafe extern "C" {
         field_id: StringView,
         in_value: *const std::ffi::c_void,
         out_value: *mut std::ffi::c_void,
+        size: usize,
+        align: usize,
         out_error: *mut i32,
     ) -> bool;
 
@@ -581,6 +587,8 @@ unsafe extern "C" {
         interface_id: StringView,
         field_id: StringView,
         value: *const std::ffi::c_void,
+        size: usize,
+        align: usize,
     ) -> bool;
 
     /// Install a Rust closure as a field's set handler. See mw_com_impl_call_field_set_handler.
@@ -589,6 +597,8 @@ unsafe extern "C" {
         interface_id: StringView,
         field_id: StringView,
         handler: *const FatPtr,
+        size: usize,
+        align: usize,
     ) -> bool;
 }
 
@@ -1228,8 +1238,10 @@ impl FFIBridge for LolaFFIBridge {
         interface_id: &str,
         field_id: &str,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32> {
-        let mut error: i32 = -1;
+        let mut error: i32 = FIELD_OPERATION_UNAVAILABLE;
         // SAFETY: proxy_ptr and out_value are guaranteed to be valid per the caller's contract; error is
         // a valid out-parameter on the stack of this call.
         let ok = unsafe {
@@ -1238,6 +1250,8 @@ impl FFIBridge for LolaFFIBridge {
                 StringView::from(interface_id),
                 StringView::from(field_id),
                 out_value as *mut std::ffi::c_void,
+                size,
+                align,
                 &mut error,
             )
         };
@@ -1251,8 +1265,10 @@ impl FFIBridge for LolaFFIBridge {
         field_id: &str,
         in_value: *const u8,
         out_value: *mut u8,
+        size: usize,
+        align: usize,
     ) -> Result<(), i32> {
-        let mut error: i32 = -1;
+        let mut error: i32 = FIELD_OPERATION_UNAVAILABLE;
         // SAFETY: see proxy_field_get; in_value is guaranteed to be valid per the caller's contract.
         let ok = unsafe {
             mw_com_proxy_field_set(
@@ -1261,6 +1277,8 @@ impl FFIBridge for LolaFFIBridge {
                 StringView::from(field_id),
                 in_value as *const std::ffi::c_void,
                 out_value as *mut std::ffi::c_void,
+                size,
+                align,
                 &mut error,
             )
         };
@@ -1273,6 +1291,8 @@ impl FFIBridge for LolaFFIBridge {
         interface_id: &str,
         field_id: &str,
         value: *const u8,
+        size: usize,
+        align: usize,
     ) -> bool {
         // SAFETY: skeleton_ptr and value are guaranteed to be valid per the caller's contract.
         unsafe {
@@ -1281,6 +1301,8 @@ impl FFIBridge for LolaFFIBridge {
                 StringView::from(interface_id),
                 StringView::from(field_id),
                 value as *const std::ffi::c_void,
+                size,
+                align,
             )
         }
     }
@@ -1291,6 +1313,8 @@ impl FFIBridge for LolaFFIBridge {
         interface_id: &str,
         field_id: &str,
         handler: &FatPtr,
+        size: usize,
+        align: usize,
     ) -> bool {
         // SAFETY: skeleton_ptr and handler are guaranteed to be valid per the caller's contract.
         unsafe {
@@ -1299,6 +1323,8 @@ impl FFIBridge for LolaFFIBridge {
                 StringView::from(interface_id),
                 StringView::from(field_id),
                 handler,
+                size,
+                align,
             )
         }
     }

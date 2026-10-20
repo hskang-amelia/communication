@@ -21,19 +21,25 @@ functions. This fork implements that layer, scoped to upstream issue #782 (synch
   `EXPORT_MW_COM_METHOD` registers a `MethodMemberOperation` that returns those bindings;
   `ProxyMethodBaseView::GetMethodBinding()` was added as the proxy-side counterpart of the existing skeleton accessor.
 - Calls are synchronous and wrapped in an already-resolved `Future`. The C++ binding supports one call in flight
-  (`kCallQueueSize == 1`), so every call uses queue position 0.
+  (`kCallQueueSize == 1`), so every call uses queue position 0. The C++ `ProxyMethod`/`ProxyField` is not
+  thread-safe, so each Rust caller holds a mutex over the whole write-args/`DoCall`/read-return sequence.
 - **Argument layout.** C++ packs all arguments into one buffer with `type_erased_storage.h`
   (`CreateDataTypeSizeInfoFromTypes`/`SerializeArgs`): sequential fields, natural alignment, size rounded up to the
   largest alignment. A Rust tuple's layout is not guaranteed to match, so `MethodArgsCodec` (`score_com_concept`)
-  serializes `Args` field by field with the same algorithm, and `LolaMethodInArgAllocator` hands out zero-copy slots
-  at the same offsets. Both sides agree provided the buffer start is aligned, which the C++ allocation guarantees.
-- The in-args buffer size is checked against `Args::layout()` before writing; a mismatch returns an error instead of
-  overflowing the buffer.
+  serializes `Args` field by field with the same algorithm. Both sides agree provided the buffer start is aligned,
+  which the C++ allocation guarantees.
+- The in-args and return-value buffer sizes must equal `Args::layout()`/`size_of::<Return>()`; a mismatch returns an
+  error on the caller side and aborts on the handler side (as the typed C++ `SkeletonMethod` asserts).
+- Zero-copy arguments are not supported yet: `allocate()` returns `ZeroCopyNotSupported`. Slots in the C++ in-args
+  buffer cannot be tied to the caller's borrow with the current concept traits, and the buffer is reused by the next
+  call.
 - Void methods are detected with a `TypeId` check, since `Return` is generic in the concept traits.
 - `LolaMethodCaller`/`LolaMethodHandler` are parameterized over the concrete `B: FFIBridge` rather than the runtime,
   because they need `LolaConsumerInfo<B>`/`LolaProviderInfo<B>` and the bridge itself.
 - Known gap: `SkeletonMethodBinding` has no way to unregister a handler, so a registered Rust closure lives as long as
-  the process.
+  the process. Only the first `register_handler()`/`register_set_handler()` per handler object reaches C++ (C++
+  replaces handlers without a lock); C++ keeps it across `StopOfferService`, so unoffer/offer keeps serving it and a
+  later registration is logged and ignored.
 
 ### 1.3 Field FFI
 
@@ -56,7 +62,9 @@ So fields go through the typed C++ API instead. `EXPORT_MW_COM_FIELD(type, membe
    `RegisterSetHandler()`. Which operations a field supports is detected at compile time from the SFINAE-gated API,
    following its `WithGetter`/`WithSetter` tags.
 
-Values cross the boundary as raw `T` memory, which is sound for `CommData` (`Reloc`) types. On the Rust side,
+Values cross the boundary as raw `T` memory, which is sound for `CommData` (`Reloc`) types. Since the registry is
+keyed by name only, every field FFI call passes `size_of::<T>()`/`align_of::<T>()` and C++ rejects a mismatch with
+the field type (`kFieldTypeMismatch`, `FieldTypeMismatch` in Rust). On the Rust side,
 `LolaFieldGetCaller`/`LolaFieldSetCaller` call the field FFI (zero-copy set is not supported: `ProxyField<T>::Set`
 copies its argument), and `LolaFieldPublisher` maps `update()` to `SkeletonField::Update()` and
 `register_set_handler()` to `SkeletonField::RegisterSetHandler()`.
@@ -130,43 +138,33 @@ REQUEST/REPLY with a preallocated, bounded receive-buffer pool.
 
 ---
 
-## 3. E2E protection for Rust methods (upstream #1062)
+## 3. E2E protection for Rust methods and fields (upstream #1062)
 
-### 3.1 Findings
+### 3.1 Upstream direction
 
 - Nothing in `score/mw/com` implements E2E protection today, on the C++ or the Rust side.
-- The AUTOSAR E2E protocol specification has, besides the regular profiles for signals and events, a method-specific
-  family (4m, 7m, 8m, 44m) that adds message type (request/response), message result and source id. Profile 4m uses a
-  16-byte header with CRC-32/AUTOSAR (polynomial `0xF4ACFB13`). Methods therefore need more header fields than events
-  or fields, even if the mechanism is shared.
-- E2E cannot detect a lost or delayed method response; that needs a separate timeout mechanism.
-- On Classic Platform the E2E transformer sits between RTE and the binding, invisible to application code. The
-  equivalent boundary here is the Rust/C++ FFI.
-- The method in-args and return buffers are allocated by C++ to the exact size of `Args`/`Return`. A framework-added
-  header therefore needs the size computation to grow on both sides at once (`CreateDataTypeSizeInfoFromTypes` and
+- The maintainers stated that S-CORE cannot provide E2E functionality based directly on the AUTOSAR specifications,
+  because of licensing restrictions.
+- They are designing an E2E protection/verification API for C++. The Rust API is to be derived from it: the API
+  mechanics can be designed freely, but the error classes are limited to what C++ provides.
+- Events come first, methods after.
+
+### 3.2 Decision
+
+No E2E code in this fork. An earlier standalone prototype based on an AUTOSAR profile was removed. The Rust work waits
+for the C++ API and starts with events.
+
+Points to carry into that work:
+
+- The method in-args and return buffers are allocated by C++ to the exact size of `Args`/`Return`. Any header added by
+  the framework needs the size computation to grow on both sides at once (`CreateDataTypeSizeInfoFromTypes` and
   `MethodArgsCodec::layout()`).
+- Methods need more protection metadata than events (request/response type, result, caller identity), so a shared
+  mechanism should not assume an identical header.
+- A lost or delayed method response is not detectable by payload protection; that needs a timeout.
+- `MethodHandlerCall::call` returns `Return`, not a `Result`, so a handler cannot refuse a request whose check failed
+  (an upstream concept change).
+- Rust-side protection alone covers only Rust-to-Rust traffic.
 
-AUTOSAR specification files are kept out of the tree (`.gitignore`).
-
-### 3.2 Prototype
-
-`docs/prototypes/e2e_profile4m_crc.rs` is a standalone Profile 4m protect/check implementation (`rustc -O
-e2e_profile4m_crc.rs`). It validates CRC-32/AUTOSAR against the public catalog check value (`0x1697d06a` for
-`"123456789"`) and shows that a corrupted payload is caught as `WrongCrc` and a replayed frame as `WrongSequence`.
-
-A version wired into the method call path, with a generic `E2E<T>` envelope and caller/handler wrappers tested
-against a mocked FFI, was explored and dropped: it tested no runtime code, and the real work is on the C++ side
-(§3.3).
-
-### 3.3 What a real implementation needs
-
-- C++: account for the header in the method buffer sizes, plus a real proxy/skeleton integration test of the
-  C++/Rust size agreement.
-- An E2E state machine (counter-delta tolerance, consecutive-failure counting, status verdict), configuration-driven
-  profile and DataID, and a real source id.
-- An `interface!`-level opt-in that instantiates the protected caller/handler.
-- A way for a method handler to refuse a request (`MethodHandlerCall::call` returns `Return`, not a `Result`; an
-  upstream concept change).
-- A unique `CommData::ID` per protected type, and a padding-safe byte view of the payload for the CRC.
-- Safety: Rust-side E2E alone protects only Rust-to-Rust traffic; requirement tracing to the AUTOSAR E2E requirements
-  is still to be agreed with the maintainers.
+If a product needs E2E before the upstream API exists, it belongs in the product layer at the payload level, using an
+implementation the product is licensed to use, so that it can be replaced by the upstream API later.

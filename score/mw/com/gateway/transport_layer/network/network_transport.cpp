@@ -109,12 +109,14 @@ std::string ToWireInstance(const score::mw::com::InstanceSpecifier& specifier)
     return std::string{specifier.ToString()};
 }
 
+/// Only events cross the network (README "Events only"): fields and methods are rejected here on the sending side
+/// and dropped on the receiving side, so that neither gateway core ever sees a non-event element reference.
 score::Result<ElementRef> MakeRef(const score::mw::com::InstanceSpecifier& specifier,
                                   impl::ServiceElementType type,
                                   std::string element)
 {
     ElementRef ref{};
-    if (!ToWireKind(type, ref.kind))
+    if ((type != impl::ServiceElementType::EVENT) || !ToWireKind(type, ref.kind))
     {
         return score::MakeUnexpected(TransportErrorc::kNotSupported);
     }
@@ -300,6 +302,27 @@ std::uint64_t NetworkTransport::TypeIdRejections() const noexcept
     return type_id_rejections_.load();
 }
 
+std::uint64_t NetworkTransport::UnsupportedElementRejections() const noexcept
+{
+    return unsupported_element_rejections_.load();
+}
+
+bool NetworkTransport::AcceptsElement(const ElementRef& ref, std::string_view what)
+{
+    if (ref.kind == WireElementKind::kEvent)
+    {
+        return true;
+    }
+    // GatewayCore only handles events; a field or method reference would hit an assertion there. Drop the frame
+    // instead of letting a peer take the gateway down.
+    unsupported_element_rejections_.fetch_add(1U);
+    score::mw::log::LogError(kLogContext) << "NetworkTransport: dropped" << what << "for" << std::string_view{ref.instance}
+                                          << "element" << std::string_view{ref.element}
+                                          << ": only events are supported (kind"
+                                          << static_cast<std::uint32_t>(ref.kind) << ")";
+    return false;
+}
+
 bool NetworkTransport::CheckTypeIds(const network::ProvideService& request)
 {
     bool accepted{true};
@@ -385,6 +408,10 @@ void NetworkTransport::Dispatch(const Frame& frame)
     }
     else if (const auto* reg = std::get_if<RegisterNotification>(&frame.body))
     {
+        if (!AcceptsElement(reg->ref, "RegisterNotification"))
+        {
+            return;
+        }
         WithInstance(reg->ref.instance, "RegisterNotification", [this, reg](score::mw::com::InstanceSpecifier spec) {
             LogIfFailed(gateway_core_.RegisterUpdateNotification(
                             std::move(spec), FromWireKind(reg->ref.kind), std::string{reg->ref.element}),
@@ -393,6 +420,10 @@ void NetworkTransport::Dispatch(const Frame& frame)
     }
     else if (const auto* unreg = std::get_if<UnregisterNotification>(&frame.body))
     {
+        if (!AcceptsElement(unreg->ref, "UnregisterNotification"))
+        {
+            return;
+        }
         WithInstance(
             unreg->ref.instance, "UnregisterNotification", [this, unreg](score::mw::com::InstanceSpecifier spec) {
                 LogIfFailed(gateway_core_.UnregisterUpdateNotification(
@@ -402,6 +433,10 @@ void NetworkTransport::Dispatch(const Frame& frame)
     }
     else if (const auto* update = std::get_if<UpdateNotification>(&frame.body))
     {
+        if (!AcceptsElement(update->ref, "UpdateNotification"))
+        {
+            return;
+        }
         WithInstance(
             update->ref.instance, "UpdateNotification", [this, update](score::mw::com::InstanceSpecifier spec) {
                 LogIfFailed(gateway_core_.NotifyUpdate(

@@ -89,8 +89,12 @@ class NetworkTransport final : public Transport
     /// \brief Number of ProvideService requests rejected because of the type id check.
     std::uint64_t TypeIdRejections() const noexcept;
 
+    /// \brief Number of inbound frames dropped because they referenced a field or a method (events only).
+    std::uint64_t UnsupportedElementRejections() const noexcept;
+
   private:
     void Dispatch(const Frame& frame);
+    bool AcceptsElement(const ElementRef& ref, std::string_view what);
     bool CheckTypeIds(const network::ProvideService& request);
     RequestStatus HandleProvideService(const network::ProvideService& request);
     RequestStatus HandleOfferService(const network::OfferService& request);
@@ -99,6 +103,7 @@ class NetworkTransport final : public Transport
     GatewayCore& gateway_core_;
     const TypeIdConfig type_ids_;
     std::atomic<std::uint64_t> type_id_rejections_{0U};
+    std::atomic<std::uint64_t> unsupported_element_rejections_{0U};
     // Declared before channel_: the channel references the bus and must be destroyed first.
     std::unique_ptr<IMessageBus> bus_;
     RpcChannel channel_;

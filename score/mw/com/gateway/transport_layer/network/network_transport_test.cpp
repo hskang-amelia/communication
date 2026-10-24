@@ -198,6 +198,72 @@ TEST_F(NetworkTransportTest, ForwardSampleDataSupportsEventsOnly)
             .has_value());
 }
 
+TEST_F(NetworkTransportTest, NotificationCallsRejectFieldsAndMethodsBeforeSending)
+{
+    EXPECT_CALL(destination_core_, RegisterUpdateNotification(_, _, _)).Times(0);
+    EXPECT_CALL(destination_core_, UnregisterUpdateNotification(_, _, _)).Times(0);
+    EXPECT_CALL(destination_core_, NotifyUpdate(_, _, _)).Times(0);
+
+    for (const auto type : {impl::ServiceElementType::FIELD, impl::ServiceElementType::METHOD})
+    {
+        const auto registered = source_->RegisterUpdateNotification(Specifier(), type, "f");
+        ASSERT_FALSE(registered.has_value());
+        EXPECT_EQ(registered.error(), TransportErrorc::kNotSupported);
+
+        const auto unregistered = source_->UnregisterUpdateNotification(Specifier(), type, "f");
+        ASSERT_FALSE(unregistered.has_value());
+        EXPECT_EQ(unregistered.error(), TransportErrorc::kNotSupported);
+
+        const auto notified = source_->NotifyUpdate(Specifier(), type, "f");
+        ASSERT_FALSE(notified.has_value());
+        EXPECT_EQ(notified.error(), TransportErrorc::kNotSupported);
+    }
+    // Nothing went over the wire: the destination never dispatched a frame.
+    EXPECT_EQ(destination_->Statistics().requests_dispatched, 0U);
+    EXPECT_EQ(destination_->Statistics().notifications_dispatched, 0U);
+}
+
+/// A peer that does not apply the events-only rule (or a corrupted frame) must not reach the gateway core with a
+/// field or method reference: GatewayApplication asserts on those and would take the whole gateway down.
+TEST_F(NetworkTransportTest, InboundFieldOrMethodReferencesAreDroppedWithoutReachingTheCore)
+{
+    // A bare bus endpoint stands in for a misbehaving peer; only the destination has a transport.
+    source_.reset();
+    destination_.reset();
+    auto buses = LoopbackBus::CreatePair();
+    auto& peer = *buses.first;
+    ASSERT_EQ(peer.Open([](const std::uint8_t*, std::size_t) {}), BusStatus::kOk);
+    destination_ = std::make_unique<NetworkTransport>(destination_core_, std::move(buses.second), FastConfig());
+    ASSERT_TRUE(destination_->Setup().has_value());
+
+    EXPECT_CALL(destination_core_, RegisterUpdateNotification(_, _, _)).Times(0);
+    EXPECT_CALL(destination_core_, UnregisterUpdateNotification(_, _, _)).Times(0);
+    std::promise<void> event_update{};
+    EXPECT_CALL(destination_core_, NotifyUpdate(_, impl::ServiceElementType::EVENT, std::string{"speed"}))
+        .WillOnce(Invoke([&event_update](auto, auto, auto) {
+            event_update.set_value();
+            return score::Result<void>{};
+        }));
+
+    constexpr std::uint64_t kPeerSession{0xBADU};
+    std::uint32_t sequence{1U};
+    const auto publish = [&peer, &sequence](const FrameBody& body) {
+        std::vector<std::uint8_t> buffer{};
+        EncodeError error{};
+        ASSERT_TRUE(Encode(FrameHeader{KindOf(body), kPeerSession, sequence++}, body, buffer, error));
+        ASSERT_EQ(peer.Publish(buffer.data(), buffer.size()), BusStatus::kOk);
+    };
+    publish(UpdateNotification{ElementRef{std::string{kInstance}, WireElementKind::kField, "f"}});
+    publish(RegisterNotification{ElementRef{std::string{kInstance}, WireElementKind::kMethod, "m"}});
+    publish(UnregisterNotification{ElementRef{std::string{kInstance}, WireElementKind::kField, "f"}});
+    // The transport is still alive and still forwards events after the bad frames.
+    publish(UpdateNotification{ElementRef{std::string{kInstance}, WireElementKind::kEvent, "speed"}});
+
+    EXPECT_EQ(event_update.get_future().wait_for(2s), std::future_status::ready);
+    EXPECT_EQ(destination_->UnsupportedElementRejections(), 3U);
+    peer.Close();
+}
+
 TEST_F(NetworkTransportTest, NestedRequestFromRemoteCoreDoesNotDeadlock)
 {
     // The destination GatewayApplication re-registers active subscriptions while it handles ProvideService.

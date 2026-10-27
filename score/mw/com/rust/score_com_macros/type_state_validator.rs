@@ -24,9 +24,9 @@ fn parse_name_list_attr(attrs: &[syn::Attribute], attr_name: &str) -> HashSet<St
     let mut names = HashSet::new();
     for attr in attrs {
         if attr.path().is_ident(attr_name) {
-            if let Ok(list) = attr.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated,
-            ) {
+            if let Ok(list) =
+                attr.parse_args_with(syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated)
+            {
                 for ident in list {
                     names.insert(ident.to_string());
                 }
@@ -85,18 +85,17 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     // Extract runtime generic parameter from the first generic param of the struct.
-    let (runtime_param_name, runtime_param_with_bounds) =
-        if let Some(param) = input.generics.params.first() {
-            match param {
-                syn::GenericParam::Type(type_param) => {
-                    let n = &type_param.ident;
-                    (quote! { #n }, quote! { #param })
-                }
-                _ => (quote! { R }, quote! { R: score_com::Runtime + ?Sized }),
-            }
-        } else {
-            (quote! { R }, quote! { R: score_com::Runtime + ?Sized })
-        };
+    let (runtime_param_name, runtime_param_with_bounds) = if let Some(param) = input.generics.params.first() {
+        match param {
+            syn::GenericParam::Type(type_param) => {
+                let n = &type_param.ident;
+                (quote! { #n }, quote! { #param })
+            },
+            _ => (quote! { R }, quote! { R: score_com::Runtime + ?Sized }),
+        }
+    } else {
+        (quote! { R }, quote! { R: score_com::Runtime + ?Sized })
+    };
 
     // Read #[field_setter_list(name1, name2, ...)] and #[field_getter_list(name1, name2, ...)]
     // emitted by interface_producer_mixed! to know which fields have WithSetter / WithGetter.
@@ -107,20 +106,17 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
             _ => {
-                return syn::Error::new_spanned(
-                    name,
-                    "TypeStateValidator only supports structs with named fields",
-                )
-                .to_compile_error()
-                .into();
-            }
+                return syn::Error::new_spanned(name, "TypeStateValidator only supports structs with named fields")
+                    .to_compile_error()
+                    .into();
+            },
         },
         // TODO: If require support for enum or tuple struct then add support here.
         _ => {
             return syn::Error::new_spanned(name, "TypeStateValidator only supports structs")
                 .to_compile_error()
                 .into();
-        }
+        },
     };
 
     // Classify each field by the last segment of its type path.
@@ -168,7 +164,7 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
                                 });
                             }
                         }
-                    }
+                    },
                     "MethodHandler" => {
                         if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                             if args.args.len() >= 2 {
@@ -185,8 +181,8 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
                                 }
                             }
                         }
-                    }
-                    _ => {} // Other fields (e.g. PhantomData) are ignored.
+                    },
+                    _ => {}, // Other fields (e.g. PhantomData) are ignored.
                 }
             }
         }
@@ -268,8 +264,7 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
         .iter()
         .enumerate()
         .map(|(i, member)| {
-            let update_fn =
-                syn::Ident::new(&format!("update_{}", member.ident), member.ident.span());
+            let update_fn = syn::Ident::new(&format!("update_{}", member.ident), member.ident.span());
             let inner_ty = &member.inner_ty;
             let field_ident = &member.ident;
 
@@ -313,10 +308,7 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
         .enumerate()
         .map(|(j, &field_idx)| {
             let member = &field_members[field_idx];
-            let register_fn = syn::Ident::new(
-                &format!("register_set_handler_{}", member.ident),
-                member.ident.span(),
-            );
+            let register_fn = syn::Ident::new(&format!("register_set_handler_{}", member.ident), member.ident.span());
             let inner_ty = &member.inner_ty;
             let field_ident = &member.ident;
             let hj_index = n_fields + j;
@@ -363,10 +355,7 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
         .iter()
         .map(|&field_idx| {
             let member = &field_members[field_idx];
-            let register_fn = syn::Ident::new(
-                &format!("register_get_handler_{}", member.ident),
-                member.ident.span(),
-            );
+            let register_fn = syn::Ident::new(&format!("register_get_handler_{}", member.ident), member.ident.span());
             let inner_ty = &member.inner_ty;
             let field_ident = &member.ident;
 
@@ -395,10 +384,7 @@ pub fn derive_typestate_validator_impl(input: TokenStream) -> TokenStream {
         .iter()
         .enumerate()
         .map(|(p, member)| {
-            let register_fn = syn::Ident::new(
-                &format!("register_{}_handler", member.ident),
-                member.ident.span(),
-            );
+            let register_fn = syn::Ident::new(&format!("register_{}_handler", member.ident), member.ident.span());
             let args_ty = &member.args_ty;
             let return_ty = &member.return_ty;
             let method_ident = &member.ident;

@@ -1350,9 +1350,12 @@ mod test {
                 );
             });
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().times(1).in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1424,9 +1427,12 @@ mod test {
                     "unsubscribe_to_event called with unknown pointer"
                 );
             });
-        mock.expect_destroy_proxy().times(1).in_sequence(&mut seq).returning(move |ptr| {
-            assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1481,9 +1487,12 @@ mod test {
             .returning(|_, _| None);
 
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().times(1).in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         let bridge = SharedMockBridge::new(mock);
         let subscribable = LolaSubscribableImpl::<TestData, SharedMockBridge> {

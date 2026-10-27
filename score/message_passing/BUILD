@@ -284,6 +284,17 @@ cc_unit_test(
 )
 
 cc_unit_test(
+    name = "unix_domain_reentrancy_probe_test",
+    srcs = [
+        "unix_domain_reentrancy_probe_test.cpp",
+    ],
+    features = COMPILER_WARNING_FEATURES,
+    deps = [
+        ":message_passing_unix_domain",
+    ],
+)
+
+cc_unit_test(
     name = "qnx_dispatch_test",
     srcs = [
         "dispatch_thread_runner_test.cpp",

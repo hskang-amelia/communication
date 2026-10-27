@@ -43,5 +43,3 @@ pub use method::{
     LolaFieldGetCaller, LolaFieldSetCaller, LolaMethodCaller, LolaMethodHandler, LolaMethodInArgAllocator,
     LolaMethodInArgMaybeUninit, LolaMethodReturnSample,
 };
-
-use core::fmt::Debug;

@@ -510,10 +510,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         method_id: &str,
     ) -> *mut ProxyMethodBinding {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .get_method_from_proxy(proxy_ptr, interface_id, method_id)
-        }
+        unsafe { self.locked().get_method_from_proxy(proxy_ptr, interface_id, method_id) }
     }
 
     unsafe fn get_method_from_skeleton(
@@ -535,10 +532,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         queue_position: usize,
     ) -> Option<(*mut u8, usize)> {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .proxy_method_get_in_args_buffer(binding, queue_position)
-        }
+        unsafe { self.locked().proxy_method_get_in_args_buffer(binding, queue_position) }
     }
 
     unsafe fn proxy_method_get_return_value_buffer(
@@ -558,16 +552,9 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         unsafe { self.locked().proxy_method_do_call(binding, queue_position) }
     }
 
-    unsafe fn skeleton_method_register_handler(
-        &self,
-        binding: *mut SkeletonMethodBinding,
-        handler: &FatPtr,
-    ) -> bool {
+    unsafe fn skeleton_method_register_handler(&self, binding: *mut SkeletonMethodBinding, handler: &FatPtr) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .skeleton_method_register_handler(binding, handler)
-        }
+        unsafe { self.locked().skeleton_method_register_handler(binding, handler) }
     }
 
     // --- Field subscription queries.
@@ -576,15 +563,9 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         unsafe { self.locked().proxy_event_get_free_sample_count(event_ptr) }
     }
 
-    unsafe fn proxy_event_get_num_new_samples_available(
-        &self,
-        event_ptr: *mut ProxyEventBase,
-    ) -> Option<usize> {
+    unsafe fn proxy_event_get_num_new_samples_available(&self, event_ptr: *mut ProxyEventBase) -> Option<usize> {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .proxy_event_get_num_new_samples_available(event_ptr)
-        }
+        unsafe { self.locked().proxy_event_get_num_new_samples_available(event_ptr) }
     }
 
     // --- Field get/set/update FFI.

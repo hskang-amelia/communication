@@ -35,8 +35,8 @@ use std::sync::{Mutex, MutexGuard};
 use bridge_ffi_rs::{FFIBridge, FatPtr, ProxyMethodBinding, SkeletonMethodBinding, FIELD_TYPE_MISMATCH};
 use score_com_concept::{
     CommData, Error, MethodArgs, MethodArgsAllocate, MethodArgsPtrTuple, MethodCaller, MethodFailedReason,
-    MethodHandler, MethodHandlerCall, MethodInArgAllocator, MethodInArgMaybeUninit, MethodInArgPtr,
-    MethodReturnSample, Result, ZeroCopyArgs,
+    MethodHandler, MethodHandlerCall, MethodInArgAllocator, MethodInArgMaybeUninit, MethodInArgPtr, MethodReturnSample,
+    Result, ZeroCopyArgs,
 };
 use score_log as log;
 
@@ -142,9 +142,9 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
         Self: Sized,
     {
         // One ProxyBase per caller, as LolaSubscribableImpl does per event subscriber.
-        let handle = instance_info
-            .get_handle()
-            .ok_or(Error::ConsumerError(score_com_concept::ConsumerFailedReason::ServiceHandleNotFound))?;
+        let handle = instance_info.get_handle().ok_or(Error::ConsumerError(
+            score_com_concept::ConsumerFailedReason::ServiceHandleNotFound,
+        ))?;
         let proxy = NativeProxyBase::new(instance_info.bridge(), instance_info.interface_id(), handle)?;
 
         // SAFETY: proxy.as_ptr() is a valid, just-created ProxyBase*.
@@ -153,8 +153,8 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
                 .bridge()
                 .get_method_from_proxy(proxy.as_ptr(), instance_info.interface_id(), method_name)
         };
-        let binding = NonNull::new(raw_binding)
-            .ok_or(Error::MethodError(MethodFailedReason::MethodCallerCreationFailed))?;
+        let binding =
+            NonNull::new(raw_binding).ok_or(Error::MethodError(MethodFailedReason::MethodCallerCreationFailed))?;
 
         Ok(Self {
             binding,
@@ -174,11 +174,9 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodCaller<Args, Return
             if size > 0 {
                 // SAFETY: self.binding is valid; only called for methods with in-arguments, as
                 // GetInArgsBuffer requires.
-                let (buf_ptr, buf_len) = unsafe {
-                    self.bridge
-                        .proxy_method_get_in_args_buffer(self.binding.as_ptr(), 0)
-                }
-                .ok_or(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable))?;
+                let (buf_ptr, buf_len) =
+                    unsafe { self.bridge.proxy_method_get_in_args_buffer(self.binding.as_ptr(), 0) }
+                        .ok_or(Error::MethodError(MethodFailedReason::InArgsBufferUnavailable))?;
                 // The buffer is sized for the C++ argument types; a different size means the C++ and Rust
                 // argument layouts disagree.
                 if buf_len != size {
@@ -333,7 +331,10 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> LolaMethodHandler<Args, R
         // SAFETY: self.binding is valid while self._provider is alive; fat_ptr references the closure
         // above. On success C++ keeps it for the process lifetime (SkeletonMethodBinding has no
         // unregister hook).
-        let registered = unsafe { self.bridge.skeleton_method_register_handler(self.binding.as_ptr(), &fat_ptr) };
+        let registered = unsafe {
+            self.bridge
+                .skeleton_method_register_handler(self.binding.as_ptr(), &fat_ptr)
+        };
         if !registered {
             // C++ never took ownership, so free the closure here and allow another attempt.
             drop(unsafe { Box::from_raw(raw) });
@@ -359,8 +360,8 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Retur
                 method_name,
             )
         };
-        let binding = NonNull::new(raw_binding)
-            .ok_or(Error::MethodError(MethodFailedReason::MethodHandlerCreationFailed))?;
+        let binding =
+            NonNull::new(raw_binding).ok_or(Error::MethodError(MethodFailedReason::MethodHandlerCreationFailed))?;
 
         Ok(Self {
             binding,
@@ -376,7 +377,7 @@ impl<Args: MethodArgs, Return: CommData, B: FFIBridge> MethodHandler<Args, Retur
         F: MethodHandlerCall<Args, Return>,
     {
         match self.try_register_handler(handler) {
-            Ok(()) => {}
+            Ok(()) => {},
             Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered)) => log::warn!(
                 "LolaMethodHandler::register_handler: a handler is already registered for this method; \
                  the new handler is ignored and the first one stays in use"
@@ -417,9 +418,9 @@ impl<B: FFIBridge> LolaFieldAccess<B> {
     /// `method_name` is the `interface!` macro's `"{field}_get"`/`"{field}_set"` member name;
     /// `suffix` is stripped from it to get the field name the C++ registry knows.
     fn new(method_name: &str, suffix: &str, instance_info: LolaConsumerInfo<B>) -> Result<Self> {
-        let handle = instance_info
-            .get_handle()
-            .ok_or(Error::ConsumerError(score_com_concept::ConsumerFailedReason::ServiceHandleNotFound))?;
+        let handle = instance_info.get_handle().ok_or(Error::ConsumerError(
+            score_com_concept::ConsumerFailedReason::ServiceHandleNotFound,
+        ))?;
         let proxy = NativeProxyBase::new(instance_info.bridge(), instance_info.interface_id(), handle)?;
         let field_name = method_name.strip_suffix(suffix).unwrap_or(method_name).to_owned();
         Ok(Self {
@@ -688,8 +689,7 @@ mod test {
         let handle = HandleType::default();
         let proxy = NativeProxyBase::<SharedMockBridge>::new(&bridge, "TestInterface", &handle)
             .expect("NativeProxyBase::new should succeed with mock create_proxy");
-        let binding =
-            NonNull::new(binding_alloc.allocate()).expect("mock binding allocation should not fail");
+        let binding = NonNull::new(binding_alloc.allocate()).expect("mock binding allocation should not fail");
 
         let caller = LolaMethodCaller::<(MethodTestArg,), MethodTestArg, SharedMockBridge> {
             binding,
@@ -718,7 +718,9 @@ mod test {
         let mut mock = MockFFIBridge::new();
         let proxy_alloc = MockPointerAllocator::<ProxyBase>::new();
         let prox = proxy_alloc.clone();
-        mock.expect_create_proxy().times(2).returning(move |_, _| prox.allocate());
+        mock.expect_create_proxy()
+            .times(2)
+            .returning(move |_, _| prox.allocate());
 
         mock.expect_proxy_field_get()
             .times(1)
@@ -731,9 +733,8 @@ mod test {
                 Ok(())
             });
         let mut set_calls = 0;
-        mock.expect_proxy_field_set()
-            .times(2)
-            .returning(move |_proxy, _interface_id, field_id, in_value, out_value, size, align| {
+        mock.expect_proxy_field_set().times(2).returning(
+            move |_proxy, _interface_id, field_id, in_value, out_value, size, align| {
                 assert_eq!(field_id, "speed");
                 assert_eq!((size, align), (4, 4));
                 set_calls += 1;
@@ -742,9 +743,14 @@ mod test {
                 }
                 // SAFETY: plays the C++ side: in_value is a live MethodTestArg, out_value valid storage.
                 let requested = unsafe { (in_value as *const MethodTestArg).read() };
-                unsafe { (out_value as *mut MethodTestArg).write(MethodTestArg { value: requested.value.min(100) }) };
+                unsafe {
+                    (out_value as *mut MethodTestArg).write(MethodTestArg {
+                        value: requested.value.min(100),
+                    })
+                };
                 Ok(())
-            });
+            },
+        );
 
         let prox_cleanup = proxy_alloc.clone();
         mock.expect_destroy_proxy().times(2).returning(move |ptr| {
@@ -773,8 +779,8 @@ mod test {
             access: make_access(&bridge),
             _phantom: PhantomData,
         };
-        let accepted = block_on_ready(setter.invoke_with_copy((MethodTestArg { value: 250 },)))
-            .expect("set should succeed");
+        let accepted =
+            block_on_ready(setter.invoke_with_copy((MethodTestArg { value: 250 },))).expect("set should succeed");
         assert_eq!(*accepted, MethodTestArg { value: 100 });
 
         match block_on_ready(setter.invoke_with_copy((MethodTestArg { value: 1 },))) {

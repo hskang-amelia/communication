@@ -155,7 +155,9 @@ unsafe extern "C" fn mw_com_impl_call_field_set_handler(ptr: *const FatPtr, valu
     // mw_com_impl_call_method_handler below.
     let callable: &FieldSetHandlerCallback = unsafe { std::mem::transmute(*ptr) };
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callable(value))).is_err() {
-        log::error!("Panic caught in mw_com_impl_call_field_set_handler: aborting to prevent unwind across FFI boundary");
+        log::error!(
+            "Panic caught in mw_com_impl_call_field_set_handler: aborting to prevent unwind across FFI boundary"
+        );
         // Abort to prevent a Rust panic from unwinding across the C++ stack boundary.
         std::process::abort();
     }
@@ -526,10 +528,7 @@ unsafe extern "C" {
 
     /// Register a Rust closure as the handler for a skeleton method. See
     /// mw_com_impl_call_method_handler's doc comment above for the callback contract.
-    fn mw_com_skeleton_method_register_handler(
-        binding: *mut SkeletonMethodBinding,
-        handler: *const FatPtr,
-    ) -> bool;
+    fn mw_com_skeleton_method_register_handler(binding: *mut SkeletonMethodBinding, handler: *const FatPtr) -> bool;
 
     // --- Field subscription queries (registry_bridge_macro.cpp).
 
@@ -538,10 +537,7 @@ unsafe extern "C" {
 
     /// Query the number of new samples currently available to receive. Returns true and writes
     /// `*out_count` on success, false otherwise (leaving `*out_count` untouched).
-    fn mw_com_proxy_event_get_num_new_samples_available(
-        event_ptr: *mut ProxyEventBase,
-        out_count: *mut usize,
-    ) -> bool;
+    fn mw_com_proxy_event_get_num_new_samples_available(event_ptr: *mut ProxyEventBase, out_count: *mut usize) -> bool;
 
     // --- Field get/set/update FFI (registry_bridge_macro.cpp).
 
@@ -1141,10 +1137,12 @@ impl FFIBridge for LolaFFIBridge {
         let mut len: usize = 0;
         // SAFETY: binding is guaranteed to be valid per the caller's contract; data/len are valid
         // out-parameters on the stack of this call.
-        let ok = unsafe {
-            mw_com_proxy_method_get_in_args_buffer(binding, queue_position, &mut data, &mut len)
-        };
-        if ok { Some((data, len)) } else { None }
+        let ok = unsafe { mw_com_proxy_method_get_in_args_buffer(binding, queue_position, &mut data, &mut len) };
+        if ok {
+            Some((data, len))
+        } else {
+            None
+        }
     }
 
     unsafe fn proxy_method_get_return_value_buffer(
@@ -1156,10 +1154,12 @@ impl FFIBridge for LolaFFIBridge {
         let mut len: usize = 0;
         // SAFETY: binding is guaranteed to be valid per the caller's contract; data/len are valid
         // out-parameters on the stack of this call.
-        let ok = unsafe {
-            mw_com_proxy_method_get_return_value_buffer(binding, queue_position, &mut data, &mut len)
-        };
-        if ok { Some((data, len)) } else { None }
+        let ok = unsafe { mw_com_proxy_method_get_return_value_buffer(binding, queue_position, &mut data, &mut len) };
+        if ok {
+            Some((data, len))
+        } else {
+            None
+        }
     }
 
     unsafe fn proxy_method_do_call(&self, binding: *mut ProxyMethodBinding, queue_position: usize) -> bool {
@@ -1167,11 +1167,7 @@ impl FFIBridge for LolaFFIBridge {
         unsafe { mw_com_proxy_method_do_call(binding, queue_position) }
     }
 
-    unsafe fn skeleton_method_register_handler(
-        &self,
-        binding: *mut SkeletonMethodBinding,
-        handler: &FatPtr,
-    ) -> bool {
+    unsafe fn skeleton_method_register_handler(&self, binding: *mut SkeletonMethodBinding, handler: &FatPtr) -> bool {
         // SAFETY: binding and handler are guaranteed to be valid per the caller's contract.
         unsafe { mw_com_skeleton_method_register_handler(binding, handler) }
     }
@@ -1188,7 +1184,11 @@ impl FFIBridge for LolaFFIBridge {
         // SAFETY: event_ptr is guaranteed to be valid per the caller's contract; count is a valid
         // out-parameter on the stack of this call.
         let ok = unsafe { mw_com_proxy_event_get_num_new_samples_available(event_ptr, &mut count) };
-        if ok { Some(count) } else { None }
+        if ok {
+            Some(count)
+        } else {
+            None
+        }
     }
 
     // --- Field get/set/update FFI.
@@ -1216,7 +1216,11 @@ impl FFIBridge for LolaFFIBridge {
                 &mut error,
             )
         };
-        if ok { Ok(()) } else { Err(error) }
+        if ok {
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
 
     unsafe fn proxy_field_set(
@@ -1243,7 +1247,11 @@ impl FFIBridge for LolaFFIBridge {
                 &mut error,
             )
         };
-        if ok { Ok(()) } else { Err(error) }
+        if ok {
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
 
     unsafe fn skeleton_field_update(

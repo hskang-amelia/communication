@@ -161,7 +161,7 @@ impl<T: CommData + Debug, B: FFIBridge> FieldPublisher<T, LolaRuntimeImpl<B>> fo
 
     fn register_set_handler(&self, callback: impl Fn(T) -> T + Send + 'static) {
         match self.try_register_set_handler(callback) {
-            Ok(()) => {}
+            Ok(()) => {},
             Err(Error::MethodError(MethodFailedReason::HandlerAlreadyRegistered)) => log::warn!(
                 "LolaFieldPublisher::register_set_handler: a set handler is already registered for this field; \
                  the new handler is ignored and the first one stays in use"
@@ -217,9 +217,7 @@ pub struct LolaFieldSampleMaybeUninit<'a, T: CommData + Debug, B: FFIBridge> {
     inner: LolaSampleMaybeUninit<'a, T, B>,
 }
 
-impl<'a, T: CommData + Debug, B: FFIBridge> AsMut<core::mem::MaybeUninit<T>>
-    for LolaFieldSampleMaybeUninit<'a, T, B>
-{
+impl<'a, T: CommData + Debug, B: FFIBridge> AsMut<core::mem::MaybeUninit<T>> for LolaFieldSampleMaybeUninit<'a, T, B> {
     fn as_mut(&mut self) -> &mut core::mem::MaybeUninit<T> {
         self.inner.as_mut()
     }
@@ -247,9 +245,9 @@ mod test {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use crate::producer::{NativeSkeletonHandle, SkeletonInstanceManager};
     use bridge_ffi_mock::{MockFFIBridge, MockPointerAllocator, SharedMockBridge};
     use bridge_ffi_rs::{FatPtr, SkeletonBase};
-    use crate::producer::{NativeSkeletonHandle, SkeletonInstanceManager};
     use mockall::Sequence;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,8 +324,7 @@ mod test {
             });
 
         let bridge = SharedMockBridge::new(mock);
-        let spec = bridge_ffi_rs::InstanceSpecifier::try_from("/test_instance")
-            .expect("valid instance specifier");
+        let spec = bridge_ffi_rs::InstanceSpecifier::try_from("/test_instance").expect("valid instance specifier");
         let skeleton_handle = NativeSkeletonHandle::<SharedMockBridge>::new(&bridge, "", &spec)
             .expect("create_skeleton mock should not fail");
         let provider = LolaProviderInfo::new_for_test(

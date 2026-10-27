@@ -333,11 +333,7 @@ pub trait FFIBridge: Send + Sync + Clone + Debug + 'static + Unpin + Default {
     /// valid `FatPtr` referencing a closure compatible with the flattened callback signature documented on
     /// `mw_com_impl_call_method_handler`, and must remain valid for as long as the method binding is alive
     /// (there is no unregister hook, so on success it lives as long as the process).
-    unsafe fn skeleton_method_register_handler(
-        &self,
-        binding: *mut SkeletonMethodBinding,
-        handler: &FatPtr,
-    ) -> bool;
+    unsafe fn skeleton_method_register_handler(&self, binding: *mut SkeletonMethodBinding, handler: &FatPtr) -> bool;
 
     // --- Field subscription queries. A field's notifier is a real ProxyEventBase, so these work on
     // the event pointer.

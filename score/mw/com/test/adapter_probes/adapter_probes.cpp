@@ -48,6 +48,22 @@ constexpr std::size_t kSampleSubscriptionCount{3U};
 // MapApiLanesStamped is several MB large: keep it in static storage (a stack instance overflows the stack).
 const MapApiLanesStamped kSample{};
 
+/// Interface for the OI-36 handler reentrancy probe: two methods on one service.
+template <typename T>
+class HandlerSyncCallInterface : public T::Base
+{
+  public:
+    using T::Base::Base;
+
+    typename T::template Method<std::int32_t(std::int32_t)> outer{*this, "outer"};
+    typename T::template Method<std::int32_t(std::int32_t)> inner{*this, "inner"};
+};
+
+using HandlerSyncCallProxy = score::mw::com::AsProxy<HandlerSyncCallInterface>;
+using HandlerSyncCallSkeleton = score::mw::com::AsSkeleton<HandlerSyncCallInterface>;
+
+const std::string kHandlerSyncCallSpecifier{"score/adapter_probes/HandlerSyncCall"};
+
 score::mw::com::InstanceSpecifier MakeSpecifier()
 {
     auto result = score::mw::com::InstanceSpecifier::Create(std::string{kInstanceSpecifier});
@@ -275,6 +291,126 @@ int ProbeOfferSecond()
     return EXIT_SUCCESS;
 }
 
+/// OI-36 / Adapter design A1: a skeleton method handler runs on the process-wide message_passing
+/// engine callback thread, which also dispatches incoming method requests and delivers method
+/// replies. The probe shows what happens when application code inside that handler performs a
+/// synchronous proxy method call:
+///   direct  - the call is made on the handler thread itself: mw::com's IsInCallback guard
+///             rejects it (the #767 behaviour) -> visible error.
+///   worker  - the call is delegated to a worker thread and the handler waits for the result
+///             (the Adapter Proxy-worker design): the guard does not fire, and the reply cannot
+///             be delivered while the handler occupies the engine thread -> silent deadlock,
+///             observed here as a bounded-wait timeout that resolves only after the handler
+///             returns.
+int ProbeHandlerSyncCall()
+{
+    auto specifier_result = score::mw::com::InstanceSpecifier::Create(std::string{kHandlerSyncCallSpecifier});
+    if (!specifier_result.has_value())
+    {
+        std::cerr << "Invalid instance specifier, terminating." << std::endl;
+        return EXIT_FAILURE;
+    }
+    const auto& specifier = specifier_result.value();
+
+    auto skeleton_result = HandlerSyncCallSkeleton::Create(specifier);
+    if (!skeleton_result.has_value())
+    {
+        std::cout << "PROBE_INFO create_skeleton=error code=" << skeleton_result.error().Message() << std::endl;
+        return EXIT_FAILURE;
+    }
+    auto skeleton = std::make_unique<HandlerSyncCallSkeleton>(std::move(skeleton_result).value());
+
+    if (!skeleton->inner.RegisterHandler([](std::int32_t& return_value, const std::int32_t& a) {
+            return_value = a + 1;
+        }).has_value())
+    {
+        std::cout << "PROBE_INFO register_inner=error" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    // Shared state between the outer handler (engine thread) and main.
+    std::atomic<HandlerSyncCallProxy*> proxy_ptr{nullptr};
+    std::atomic<int> phase{0};
+    std::string direct_outcome{"not_run"};
+    std::string worker_during_handler{"not_run"};
+    std::future<bool> worker_future;
+
+    const auto outer_handler = [&proxy_ptr, &phase, &direct_outcome, &worker_during_handler, &worker_future](
+                                   std::int32_t& return_value, const std::int32_t& a) {
+        auto* proxy = proxy_ptr.load();
+        if (phase.load() == 1)
+        {
+            // Application code calling a proxy method directly from the handler context.
+            auto inner_result = proxy->inner(a);
+            direct_outcome = inner_result.has_value()
+                                 ? std::string{"completed"}
+                                 : std::string{"rejected: "} + std::string{inner_result.error().Message()};
+        }
+        else
+        {
+            // The Adapter design: delegate the synchronous backend call to a worker and wait.
+            worker_future = std::async(std::launch::async, [proxy, a] {
+                return proxy->inner(a).has_value();
+            });
+            const auto status = worker_future.wait_for(3s);
+            worker_during_handler = (status == std::future_status::ready) ? "completed" : "timeout";
+        }
+        return_value = a;
+    };
+    if (!skeleton->outer.RegisterHandler(outer_handler).has_value())
+    {
+        std::cout << "PROBE_INFO register_outer=error" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (!skeleton->OfferService().has_value())
+    {
+        std::cout << "PROBE_INFO offer=error" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    std::unique_ptr<HandlerSyncCallProxy> proxy;
+    for (int attempt = 0; attempt < 50; ++attempt)
+    {
+        auto handles = HandlerSyncCallProxy::FindService(specifier);
+        if (handles.has_value() && !handles.value().empty())
+        {
+            auto proxy_result = HandlerSyncCallProxy::Create(*handles.value().begin());
+            if (proxy_result.has_value())
+            {
+                proxy = std::make_unique<HandlerSyncCallProxy>(std::move(proxy_result).value());
+                break;
+            }
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+    if (proxy == nullptr)
+    {
+        std::cerr << "Could not find/create proxy, terminating." << std::endl;
+        return EXIT_FAILURE;
+    }
+    proxy_ptr.store(proxy.get());
+
+    phase.store(1);
+    score::cpp::ignore = proxy->outer(1);
+    std::cout << "PROBE_RESULT OI36_direct outcome=\"" << direct_outcome << "\"" << std::endl;
+
+    phase.store(2);
+    score::cpp::ignore = proxy->outer(2);
+    std::string worker_after_handler{"still_blocked"};
+    if (worker_future.valid() && (worker_future.wait_for(3s) == std::future_status::ready))
+    {
+        worker_after_handler = worker_future.get() ? "completed" : "completed_with_error";
+    }
+    std::cout << "PROBE_RESULT OI36_worker during_handler=" << worker_during_handler
+              << " after_handler=" << worker_after_handler
+              << " verdict=" << ((worker_during_handler == "timeout") ? "deadlock_while_handler_blocks" : "no_deadlock")
+              << std::endl;
+
+    skeleton->StopOfferService();
+    return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, const char** argv)
@@ -295,6 +431,10 @@ int main(int argc, const char** argv)
     if (mode == "offer_hold")
     {
         return ProbeOfferHold();
+    }
+    if (mode == "handler_sync_call")
+    {
+        return ProbeHandlerSyncCall();
     }
     if (mode == "offer_second")
     {

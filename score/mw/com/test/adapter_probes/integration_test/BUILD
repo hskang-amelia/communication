@@ -23,5 +23,6 @@ load("//quality/integration_testing:integration_testing.bzl", "integration_test"
         "rh_serial",
         "reentrancy",
         "duplicate_offer",
+        "handler_sync_call",
     ]
 ]

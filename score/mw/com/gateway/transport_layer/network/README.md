@@ -84,7 +84,9 @@ The gateway side of the copying path lives in `GatewayApplication`:
   rejected with `"policy": "strict"` (default) and only logged and accepted with `"warn"`, which is meant for
   development: a size change then aborts the destination's typed consumers and a same-size change goes unnoticed. The
   transport logs a warning at setup when `warn` is active. Rejections are reported to the source.
-* **Events only.** Fields and methods are rejected (`kNotSupported`), like the rest of the gateway today.
+* **Events only.** Fields and methods are rejected (`kNotSupported`) on the sending side, like the rest of the
+  gateway today, and an inbound frame that still references a field or method is dropped and logged
+  (`UnsupportedElementRejections()`) before it reaches the gateway core, which asserts on non-event elements.
 * **zenoh-pico frame size.** zenoh-pico's default build reassembles messages up to `FRAG_MAX_SIZE = 4096` bytes. Build
   it with a larger `FRAG_MAX_SIZE` (verified here with 4 MiB) and set `max-frame-size` accordingly; `Open()` fails
   and logs both values if `max-frame-size` exceeds the library's `Z_FRAG_MAX_SIZE`, `Publish()` rejects larger frames.

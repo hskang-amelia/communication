@@ -46,6 +46,8 @@ jobs:
         if: always()
         run: bazel test --config=ci --test_output=all //score/mw/com/example/rust-method-lola-e2e:rust_method_lola_e2e_test
 
-      - name: Lola method unit tests
+      - name: Rust mw::com unit tests and examples (Consumer::new is now fallible)
         if: always()
-        run: bazel test --config=ci --test_output=errors //score/mw/com/impl/rust/com-api/...
+        run: |
+          bazel build --config=ci //score/mw/com/rust/... //score/mw/com/impl/rust/... //score/mw/com/example/com-api-example/...
+          bazel test --config=ci --test_output=errors //score/mw/com/rust/... //score/mw/com/impl/rust/...

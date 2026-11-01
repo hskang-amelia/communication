@@ -27,15 +27,21 @@ SCENARIOS=("$@")
 WORK="$(mktemp -d)"
 ME="$(id -u)"
 OTHER=65534
-OPEN_CFG="$WORK/open.json"
-STRICT_CFG="$WORK/strict.json"
-sed 's|@ACCESS@||' "$TEMPLATE" > "$OPEN_CFG"
-sed "s|@ACCESS@|\"permission-checks\": \"strict\", \"allowedProvider\": { \"QM\": [$ME] }, \"allowedConsumer\": { \"QM\": [$ME] },|" "$TEMPLATE" > "$STRICT_CFG"
-chmod 0755 "$WORK"; chmod 0644 "$OPEN_CFG" "$STRICT_CFG"
+chmod 0755 "$WORK"
+# mw::com identifies a process by its configured applicationID (shared-memory and message-passing
+# names derive from it), so every process gets its own: cfg <open|strict> <applicationID>.
+cfg() {
+    local out="$WORK/$1-$2.json" access=""
+    [ "$1" = strict ] && access="\"permission-checks\": \"strict\", \"allowedProvider\": { \"QM\": [$ME] }, \"allowedConsumer\": { \"QM\": [$ME] },"
+    sed -e "s|@ACCESS@|$access|" -e "s|@APPID@|$2|" "$TEMPLATE" > "$out"
+    chmod 0644 "$out"
+    echo "$out"
+}
+PRODUCER_APP=6501
 
 PRODUCER=""
 start_producer() {
-    "$BIN" producer "$1" > "$WORK/producer.log" 2>&1 &
+    "$BIN" producer "$(cfg "$1" $PRODUCER_APP)" > "$WORK/producer.log" 2>&1 &
     PRODUCER=$!
     for _ in $(seq 1 100); do grep -q "PRODUCER offered" "$WORK/producer.log" 2>/dev/null && return 0; sleep 0.1; done
     echo "producer did not offer:"; cat "$WORK/producer.log"; return 1
@@ -46,7 +52,7 @@ stop_producer() {
 }
 trap 'stop_producer; jobs -p | xargs -r kill 2>/dev/null; rm -rf "$WORK"' EXIT
 
-consumer() { timeout 120 "$BIN" consumer "$@"; }
+consumer() { timeout 120 "$BIN" consumer "$(cfg "$1" "$2")" "$3"; }
 
 declare -A RESULT
 run() {
@@ -58,12 +64,12 @@ run() {
     stop_producer
 }
 
-s_simple() { start_producer "$OPEN_CFG" && consumer "$OPEN_CFG" "$1"; }
+s_simple() { start_producer open && consumer open 7001 "$1"; }
 
 s_concurrent() {
-    start_producer "$OPEN_CFG" || return 1
+    start_producer open || return 1
     local pids=() ok=0
-    for i in 1 2 3 4 5 6 7 8; do consumer "$OPEN_CFG" seq > "$WORK/c$i.log" 2>&1 & pids+=($!); done
+    for i in 1 2 3 4 5 6 7 8; do consumer open $((7100+i)) seq > "$WORK/c$i.log" 2>&1 & pids+=($!); done
     for i in "${!pids[@]}"; do wait "${pids[$i]}" && ok=$((ok+1)); done
     grep -h "FAIL\|HANG" "$WORK"/c*.log | head -5
     echo "concurrent consumers passed: $ok/8"
@@ -71,9 +77,9 @@ s_concurrent() {
 }
 
 s_overflow() {
-    start_producer "$OPEN_CFG" || return 1
+    start_producer open || return 1
     local pids=() ok=0
-    for i in $(seq 1 8); do consumer "$OPEN_CFG" slow1 > "$WORK/o$i.log" 2>&1 & pids+=($!); done
+    for i in $(seq 1 8); do consumer open $((7200+i)) slow1 > "$WORK/o$i.log" 2>&1 & pids+=($!); done
     for i in "${!pids[@]}"; do wait "${pids[$i]}" && ok=$((ok+1)); done
     local served refused
     served=$(grep -l "OK slow call" "$WORK"/o*.log | wc -l)
@@ -84,43 +90,43 @@ s_overflow() {
 }
 
 s_two_consumers() {
-    start_producer "$OPEN_CFG" || return 1
-    consumer "$OPEN_CFG" seq > "$WORK/t1.log" 2>&1 & local a=$!
-    consumer "$OPEN_CFG" seq > "$WORK/t2.log" 2>&1 & local b=$!
+    start_producer open || return 1
+    consumer open 7301 seq > "$WORK/t1.log" 2>&1 & local a=$!
+    consumer open 7302 seq > "$WORK/t2.log" 2>&1 & local b=$!
     local r=0; wait $a || r=1; wait $b || r=1
     tail -n 3 "$WORK/t1.log" "$WORK/t2.log"; return $r
 }
 
 s_early() {
-    consumer "$OPEN_CFG" early > "$WORK/early.log" 2>&1 & local c=$!
+    consumer open 7401 early > "$WORK/early.log" 2>&1 & local c=$!
     sleep 3
-    start_producer "$OPEN_CFG" || return 1
+    start_producer open || return 1
     local r=0; wait $c || r=1; cat "$WORK/early.log"; return $r
 }
 
 s_crash() {
     mkdir -p "$WORK/sync"; rm -f "$WORK/sync"/*
-    start_producer "$OPEN_CFG" || return 1
-    E2E_SYNC_DIR="$WORK/sync" consumer "$OPEN_CFG" crash > "$WORK/crash.log" 2>&1 & local c=$!
+    start_producer open || return 1
+    E2E_SYNC_DIR="$WORK/sync" consumer open 7501 crash > "$WORK/crash.log" 2>&1 & local c=$!
     for _ in $(seq 1 200); do [ -e "$WORK/sync/ready" ] && break; sleep 0.1; done
     kill -9 "$PRODUCER"; wait "$PRODUCER" 2>/dev/null; PRODUCER=""
     touch "$WORK/sync/killed"
     sleep 2
-    start_producer "$OPEN_CFG" || return 1
+    start_producer open || return 1
     touch "$WORK/sync/restarted"
     local r=0; wait $c || r=1; cat "$WORK/crash.log"; return $r
 }
 
 s_denied() {
     if ! sudo -n true 2>/dev/null; then echo "SKIP: no passwordless sudo"; return 2; fi
-    start_producer "$STRICT_CFG" || return 1
+    start_producer strict || return 1
     echo "--- allowed consumer (uid $ME) under the strict config"
-    consumer "$STRICT_CFG" basic > "$WORK/allowed.log" 2>&1; local allowed=$?
+    consumer strict 7601 basic > "$WORK/allowed.log" 2>&1; local allowed=$?
     tail -n 2 "$WORK/allowed.log"
     echo "--- consumer as uid $OTHER"
     # A copy the other uid can execute, wherever the build put the original.
     cp "$BIN" "$WORK/bin" && chmod 0755 "$WORK/bin"
-    sudo -n setpriv --reuid=$OTHER --regid=$OTHER --clear-groups timeout 60 "$WORK/bin" consumer "$STRICT_CFG" denied
+    sudo -n setpriv --reuid=$OTHER --regid=$OTHER --clear-groups timeout 60 "$WORK/bin" consumer "$(cfg strict 7602)" denied
     local denied=$?
     [ $allowed -eq 0 ] && [ $denied -eq 0 ] && return 0; return 1
 }

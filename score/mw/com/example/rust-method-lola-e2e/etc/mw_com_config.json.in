@@ -19,7 +19,7 @@
       ]
     }
   ],
-  "global": { "applicationID": 6501 },
+  "global": { "applicationID": @APPID@ },
   "serviceInstances": [
     {
       "instanceSpecifier": "/Test/Calc/Instance",

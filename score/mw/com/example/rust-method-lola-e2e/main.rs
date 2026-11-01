@@ -149,12 +149,11 @@ fn connect(rt: &LolaRuntimeImpl, within: Duration) -> Option<Consumer> {
         {
             Ok(found) => {
                 if let Some(b) = found.into_iter().next() {
+                    // A build error is an answer, not a crash: e.g. a stale offer left by a producer
+                    // that died, or no access. Keep trying until the deadline.
                     match b.build() {
                         Ok(c) => return Some(c),
-                        Err(e) => {
-                            println!("consumer build failed: {e:?}");
-                            return None;
-                        }
+                        Err(e) => println!("consumer build failed: {e:?}"),
                     }
                 }
             }

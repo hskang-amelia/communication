@@ -14,7 +14,9 @@
 //! The Calc interface of the cross-process Method/Field test: `add` is a method, `counter` a
 //! field with getter, setter and notifier. `calc_gen.h`/`calc_gen.cpp` are its C++ side.
 
-use score_com::{interface, CommData, ProviderInfo, Publisher, Reloc, Subscriber};
+// `FieldPublisher` must be in scope for the field code `interface!` generates (it calls the
+// trait's methods unqualified).
+use score_com::{interface, CommData, FieldPublisher, ProviderInfo, Publisher, Reloc, Subscriber};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reloc, CommData)]
 #[repr(C)]

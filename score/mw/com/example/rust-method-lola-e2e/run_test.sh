@@ -22,7 +22,7 @@ BIN="$(realpath "$1")"
 TEMPLATE="$(realpath "$2")"
 shift 2
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic notify seq concurrent overflow queue two_consumers early crash handler_panic dup_appid denied)
+[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic notify seq concurrent overflow queue two_consumers early crash handler_panic dup_appid dup_appid_producer denied)
 
 WORK="$(mktemp -d)"
 ME="$(id -u)"
@@ -109,6 +109,16 @@ s_dup_appid() {
     grep -h "INFO integrity\|FAIL\|HANG" "$WORK/d1.log" "$WORK/d2.log"; return $r
 }
 
+# Misconfiguration: a consumer with the producer's applicationID (the first run's wrong value
+# happened when every process shared one). Calls may fail, a wrong answer is a failure.
+s_dup_appid_producer() {
+    start_producer open || return 1
+    consumer open $PRODUCER_APP integrity > "$WORK/p1.log" 2>&1 & local a=$!
+    consumer open $PRODUCER_APP integrity > "$WORK/p2.log" 2>&1 & local b=$!
+    local r=0; wait $a || r=1; wait $b || r=1
+    grep -h "INFO integrity\|FAIL\|HANG" "$WORK/p1.log" "$WORK/p2.log"; return $r
+}
+
 s_two_consumers() {
     start_producer open || return 1
     consumer open 7301 seq > "$WORK/t1.log" 2>&1 & local a=$!
@@ -160,6 +170,7 @@ for s in "${SCENARIOS[@]}"; do
         queue) run queue s_queue ;;
         handler_panic) run handler_panic s_handler_panic ;;
         dup_appid) run dup_appid s_dup_appid ;;
+        dup_appid_producer) run dup_appid_producer s_dup_appid_producer ;;
         early) run early s_early ;;
         crash) run crash s_crash ;;
         denied) run denied s_denied ;;

@@ -46,6 +46,7 @@ sh_test(
         "crash",
         "handler_panic",
         "dup_appid",
+        "dup_appid_producer",
     ],
     data = [
         "etc/mw_com_config.json.in",

@@ -11,8 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-//! The Calc interface of the cross-process Method/Field test: `add` is a method, `counter` a
-//! field with getter, setter and notifier. `calc_gen.h`/`calc_gen.cpp` are its C++ side.
+//! The Calc interface of the cross-process Method/Field test: methods of every shape and one field
+//! with getter, setter and notifier. `calc_gen.h`/`calc_gen.cpp` are its C++ side.
 
 // `FieldPublisher` must be in scope for the field code `interface!` generates (it calls the
 // trait's methods unqualified).
@@ -33,10 +33,25 @@ pub struct Total {
     pub value: i32,
 }
 
+/// Mixed sizes and alignments; must match `calc_gen.h`'s `Wide` byte for byte.
+#[derive(Debug, Clone, Copy, PartialEq, Reloc, CommData)]
+#[repr(C)]
+#[comm_data(id = "Wide")]
+pub struct Wide {
+    pub a: u8,
+    pub b: u64,
+    pub c: u16,
+    pub d: f64,
+}
+
 interface!(
     interface Calc {
         Id = "CalcInterface",
         counter: Field<Total, WithGetter + WithSetter + WithNotifier>,
         add(Operands) -> Total,
+        mix(Wide, Wide) -> Wide,
+        ping() -> Total,
+        reset(Total) -> (),
+        slow(Total) -> Total,
     }
 );

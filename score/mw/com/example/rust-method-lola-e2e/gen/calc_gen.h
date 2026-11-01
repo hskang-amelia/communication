@@ -31,16 +31,30 @@ struct Total
     std::int32_t value;
 };
 
-/// One method and one field, so a Rust producer and a Rust consumer in different processes can
-/// exercise both over the LoLa runtime.
+/// Mixed sizes and alignments, to catch argument packing that disagrees with the C++ layout.
+struct Wide
+{
+    std::uint8_t a;
+    std::uint64_t b;
+    std::uint16_t c;
+    double d;
+};
+
+/// Methods of every shape (one argument, two arguments, none, void return, a slow handler) and one
+/// field, so a Rust producer and a Rust consumer in different processes can exercise them over
+/// the LoLa runtime.
 template <typename Trait>
 class CalcInterface : public Trait::Base
 {
   public:
     using Trait::Base::Base;
 
-    typename Trait::template Method<Total(Operands)> add{*this, "add"};
     typename Trait::template Field<Total, WithGetter, WithSetter, WithNotifier> counter{*this, "counter"};
+    typename Trait::template Method<Total(Operands)> add{*this, "add"};
+    typename Trait::template Method<Wide(Wide, Wide)> mix{*this, "mix"};
+    typename Trait::template Method<Total()> ping{*this, "ping"};
+    typename Trait::template Method<void(Total)> reset{*this, "reset"};
+    typename Trait::template Method<Total(Total)> slow{*this, "slow"};
 };
 
 using CalcProxy = AsProxy<CalcInterface>;

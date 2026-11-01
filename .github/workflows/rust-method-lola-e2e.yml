@@ -36,7 +36,14 @@ jobs:
       - name: Build
         run: bazel build --config=ci //score/mw/com/example/rust-method-lola-e2e/...
 
-      - name: Test
+      - name: Scenarios (all, outside the sandbox so "denied" can switch uid)
+        run: |
+          score/mw/com/example/rust-method-lola-e2e/run_test.sh \
+            bazel-bin/score/mw/com/example/rust-method-lola-e2e/rust_method_lola_e2e \
+            score/mw/com/example/rust-method-lola-e2e/etc/mw_com_config.json.in
+
+      - name: Scenarios (Bazel test)
+        if: always()
         run: bazel test --config=ci --test_output=all //score/mw/com/example/rust-method-lola-e2e:rust_method_lola_e2e_test
 
       - name: Lola method unit tests

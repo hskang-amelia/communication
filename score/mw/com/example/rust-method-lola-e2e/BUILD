@@ -14,8 +14,9 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-# Cross-process check of the Rust Method/Field support on the LoLa runtime: a producer and a
-# consumer process, the consumer calls the method and the field's getter and setter.
+# Cross-process checks of the Rust Method/Field support on the LoLa runtime: producer and consumer
+# processes, one scenario per failure mode (run_test.sh). The "denied" scenario needs sudo and runs
+# only from the workflow, outside the Bazel sandbox.
 rust_binary(
     name = "rust_method_lola_e2e",
     srcs = ["main.rs"],
@@ -29,13 +30,22 @@ rust_binary(
 
 sh_test(
     name = "rust_method_lola_e2e_test",
+    size = "large",
     srcs = ["run_test.sh"],
     args = [
         "$(rootpath :rust_method_lola_e2e)",
-        "$(rootpath etc/mw_com_config.json)",
+        "$(rootpath etc/mw_com_config.json.in)",
+        "basic",
+        "notify",
+        "seq",
+        "concurrent",
+        "overflow",
+        "two_consumers",
+        "early",
+        "crash",
     ],
     data = [
-        "etc/mw_com_config.json",
+        "etc/mw_com_config.json.in",
         ":rust_method_lola_e2e",
     ],
     target_compatible_with = ["@platforms//os:linux"],

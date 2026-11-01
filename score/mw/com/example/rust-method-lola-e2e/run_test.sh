@@ -22,7 +22,7 @@ BIN="$(realpath "$1")"
 TEMPLATE="$(realpath "$2")"
 shift 2
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic notify seq concurrent overflow two_consumers early crash denied)
+[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic notify seq concurrent overflow queue two_consumers early crash handler_panic dup_appid denied)
 
 WORK="$(mktemp -d)"
 ME="$(id -u)"
@@ -89,6 +89,26 @@ s_overflow() {
     [ "$ok" -eq 8 ] && [ "$served" -ge 1 ]
 }
 
+s_queue() { start_producer open && consumer open 7701 queue; }
+
+s_handler_panic() {
+    start_producer open || return 1
+    consumer open 7801 handler_panic; local r=$?
+    if kill -0 "$PRODUCER" 2>/dev/null; then echo "INFO producer still running after the handler panic"
+    else echo "INFO producer ended after the handler panic"; PRODUCER=""; fi
+    return $r
+}
+
+# Misconfiguration: two consumer processes with the same applicationID. Calls may fail, but a
+# wrong answer is a failure.
+s_dup_appid() {
+    start_producer open || return 1
+    consumer open 7901 integrity > "$WORK/d1.log" 2>&1 & local a=$!
+    consumer open 7901 integrity > "$WORK/d2.log" 2>&1 & local b=$!
+    local r=0; wait $a || r=1; wait $b || r=1
+    grep -h "INFO integrity\|FAIL\|HANG" "$WORK/d1.log" "$WORK/d2.log"; return $r
+}
+
 s_two_consumers() {
     start_producer open || return 1
     consumer open 7301 seq > "$WORK/t1.log" 2>&1 & local a=$!
@@ -137,6 +157,9 @@ for s in "${SCENARIOS[@]}"; do
         concurrent) run concurrent s_concurrent ;;
         overflow) run overflow s_overflow ;;
         two_consumers) run two_consumers s_two_consumers ;;
+        queue) run queue s_queue ;;
+        handler_panic) run handler_panic s_handler_panic ;;
+        dup_appid) run dup_appid s_dup_appid ;;
         early) run early s_early ;;
         crash) run crash s_crash ;;
         denied) run denied s_denied ;;

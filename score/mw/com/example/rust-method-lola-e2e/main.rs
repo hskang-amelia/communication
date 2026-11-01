@@ -120,6 +120,8 @@ fn producer(config: &Path) -> ExitCode {
             }
         })
         .register_slow_handler(|v: &Total| {
+            // -1 makes the handler panic, to see what a panic inside a handler does to the call.
+            assert!(v.value != -1, "handler panic requested by the consumer");
             std::thread::sleep(Duration::from_millis(SLOW_MS));
             Total { value: v.value + 1 }
         })
@@ -306,6 +308,54 @@ fn scenario_slow1(c: &Consumer, k: &mut Checks) {
     }
 }
 
+/// More concurrent calls on one consumer than the method's queueSize (2): each must end in the
+/// right value or an error, none may hang or return a wrong value.
+fn scenario_queue(c: &Consumer, k: &mut Checks) {
+    step("8 concurrent calls on one consumer", Duration::from_millis(SLOW_MS * 40));
+    let calls = (0..8).map(|i| c.slow(Total { value: 100 + i }));
+    let results = block_on(futures::future::join_all(calls));
+    let (mut served, mut refused, mut wrong) = (0, 0, Vec::new());
+    for (i, r) in results.iter().enumerate() {
+        match r {
+            Ok(s) if s.value == 101 + i as i32 => served += 1,
+            Ok(s) => wrong.push(format!("call {i} returned {}", s.value)),
+            Err(e) => {
+                refused += 1;
+                println!("DEFINED-ERROR call {i}: {e:?}");
+            }
+        }
+    }
+    println!("INFO queue: {served} served, {refused} refused, {} wrong", wrong.len());
+    k.check("no wrong value under queue overflow", wrong.is_empty(), format!("{wrong:?}"));
+    k.check("at least one call served", served >= 1, format!("{served} served"));
+}
+
+/// Calls that must never return a wrong value, whatever else happens (used where the test
+/// provokes a misconfiguration).
+fn scenario_integrity(c: &Consumer, k: &mut Checks) {
+    step("500 calls, integrity only", Duration::from_secs(60));
+    let (mut ok, mut err, mut wrong) = (0, 0, Vec::new());
+    for i in 0..500 {
+        match add(c, i, 1000) {
+            Ok(v) if v == i + 1000 => ok += 1,
+            Ok(v) => wrong.push(format!("add({i},1000) = {v}")),
+            Err(_) => err += 1,
+        }
+    }
+    println!("INFO integrity: {ok} right, {err} errors, {} wrong", wrong.len());
+    k.check("no call returned a wrong value", wrong.is_empty(), format!("{:?}", wrong.iter().take(5).collect::<Vec<_>>()));
+}
+
+/// The producer's handler panics on this call: the call must end (error), not hang.
+fn scenario_handler_panic(c: &Consumer, k: &mut Checks) {
+    step("call whose handler panics", Duration::from_secs(15));
+    let r = block_on(c.slow(Total { value: -1 })).map(|s| s.value).map_err(|e| format!("{e:?}"));
+    k.check("a panicking handler gives the caller an error", r.is_err(), format!("{r:?}"));
+    step("call after the panic", Duration::from_secs(15));
+    let r = add(c, 1, 2);
+    println!("INFO call after the handler panic: {r:?}");
+}
+
 /// Waits until `file` exists (written by run_test.sh).
 fn wait_for(file: &Path, limit: Duration) -> bool {
     let deadline = Instant::now() + limit;
@@ -371,6 +421,9 @@ fn consumer(config: &Path, scenario: &str) -> ExitCode {
         "notify" => scenario_notify(&rt, c, &mut k),
         "seq" => scenario_seq(&c, &mut k),
         "slow1" => scenario_slow1(&c, &mut k),
+        "queue" => scenario_queue(&c, &mut k),
+        "integrity" => scenario_integrity(&c, &mut k),
+        "handler_panic" => scenario_handler_panic(&c, &mut k),
         "crash" => scenario_crash(&rt, &c, &mut k),
         "denied" => {
             step("denied call", Duration::from_secs(10));

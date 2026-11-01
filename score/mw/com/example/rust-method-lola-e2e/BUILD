@@ -40,9 +40,12 @@ sh_test(
         "seq",
         "concurrent",
         "overflow",
+        "queue",
         "two_consumers",
         "early",
         "crash",
+        "handler_panic",
+        "dup_appid",
     ],
     data = [
         "etc/mw_com_config.json.in",

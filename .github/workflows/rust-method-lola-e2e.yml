@@ -1,0 +1,44 @@
+# *******************************************************************************
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************
+
+# Fork-only check: the Rust Method/Field LoLa runtime between two processes.
+name: Rust Method/Field LoLa e2e
+
+on:
+  push:
+    branches: [test/rust-method-lola-e2e]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: ./.github/actions/00_infrastructure/prepare_bazel_environment
+        with:
+          disk-cache: rust_method_lola_e2e
+          cache-mode: disabled
+
+      - name: Build
+        run: bazel build --config=ci //score/mw/com/example/rust-method-lola-e2e/...
+
+      - name: Test
+        run: bazel test --config=ci --test_output=all //score/mw/com/example/rust-method-lola-e2e:rust_method_lola_e2e_test
+
+      - name: Lola method unit tests
+        if: always()
+        run: bazel test --config=ci --test_output=errors //score/mw/com/impl/rust/com-api/...

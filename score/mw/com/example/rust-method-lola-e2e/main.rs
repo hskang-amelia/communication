@@ -110,15 +110,16 @@ fn producer(config: &Path) -> ExitCode {
         })
         .update_counter(INITIAL)
         .expect("initial value")
-        .register_add_handler(|ops: Operands| Total { value: ops.a.wrapping_add(ops.b) })
-        .register_mix_handler(mixed)
+        // Method handlers get their arguments by reference.
+        .register_add_handler(|ops: &Operands| Total { value: ops.a.wrapping_add(ops.b) })
+        .register_mix_handler(|x: &Wide, y: &Wide| mixed(*x, *y))
         .register_ping_handler(|| Total { value: 4242 })
-        .register_reset_handler(move |v: Total| {
+        .register_reset_handler(move |v: &Total| {
             if let Ok(tx) = to_main.lock() {
-                let _ = tx.send(v);
+                let _ = tx.send(*v);
             }
         })
-        .register_slow_handler(|v: Total| {
+        .register_slow_handler(|v: &Total| {
             std::thread::sleep(Duration::from_millis(SLOW_MS));
             Total { value: v.value + 1 }
         })

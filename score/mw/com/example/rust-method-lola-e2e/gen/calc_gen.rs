@@ -14,9 +14,7 @@
 //! The Calc interface of the cross-process Method/Field test: methods of every shape and one field
 //! with getter, setter and notifier. `calc_gen.h`/`calc_gen.cpp` are its C++ side.
 
-// `FieldPublisher` must be in scope for the field code `interface!` generates (it calls the
-// trait's methods unqualified).
-use score_com::{interface, CommData, FieldPublisher, ProviderInfo, Publisher, Reloc, Subscriber};
+use score_com::{interface, CommData, ProviderInfo, Publisher, Reloc, Subscriber};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reloc, CommData)]
 #[repr(C)]

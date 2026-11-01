@@ -213,10 +213,11 @@ macro_rules! interface_producer_mixed {
                 fn new(instance_info: R::ProviderInfo) -> score_com::Result<Self> {
                     Ok([<$id Producer>] {
                         $(
-                            $fi_name: R::FieldPublisher::new(
-                                stringify!($fi_name),
-                                instance_info.clone()
-                            )?,
+                            $fi_name: <R::FieldPublisher<$fi_type>
+                                as score_com::FieldPublisher<$fi_type, R>>::new(
+                                    stringify!($fi_name),
+                                    instance_info.clone()
+                                )?,
                         )*
                         $(
                             $me_name: <R::MethodHandler<($($me_arg_ty,)*), $me_ret>

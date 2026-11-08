@@ -45,6 +45,8 @@ class SkeletonMethod : public SkeletonMethodBinding
     SkeletonMethod(Skeleton& skeleton, const UniqueMethodIdentifier unique_method_identifier);
 
     Result<void> RegisterHandler(SkeletonMethodBinding::TypeErasedHandler&& type_erased_callback) override;
+    Result<void> RegisterDeferredHandler(
+        SkeletonMethodBinding::TypeErasedDeferredHandler&& type_erased_callback) override;
 
     Result<void> OnProxyMethodSubscribeFinished(
         const TypeErasedCallQueue::TypeErasedElementInfo type_erased_element_info,
@@ -73,6 +75,7 @@ class SkeletonMethod : public SkeletonMethodBinding
     void CleanUpOldHandlers(const GlobalConfiguration::ApplicationId application_id, pid_t proxy_pid);
 
     std::optional<SkeletonMethodBinding::TypeErasedHandler> type_erased_callback_;
+    std::optional<SkeletonMethodBinding::TypeErasedDeferredHandler> type_erased_deferred_callback_;
 
     std::unordered_map<ProxyMethodInstanceIdentifier, std::pair<pid_t, MethodCallRegistrationGuard>>
         registration_guards_;

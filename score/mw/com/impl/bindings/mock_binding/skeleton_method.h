@@ -24,6 +24,7 @@ class SkeletonMethod : public SkeletonMethodBinding
 {
   public:
     MOCK_METHOD(Result<void>, RegisterHandler, (TypeErasedHandler&&), (override));
+    MOCK_METHOD(Result<void>, RegisterDeferredHandler, (TypeErasedDeferredHandler&&), (override));
 };
 
 class SkeletonMethodFacade : public SkeletonMethodBinding
@@ -36,6 +37,11 @@ class SkeletonMethodFacade : public SkeletonMethodBinding
     Result<void> RegisterHandler(TypeErasedHandler&& cb) override
     {
         return skeleton_method_.RegisterHandler(std::move(cb));
+    }
+
+    Result<void> RegisterDeferredHandler(TypeErasedDeferredHandler&& cb) override
+    {
+        return skeleton_method_.RegisterDeferredHandler(std::move(cb));
     }
 
   private:

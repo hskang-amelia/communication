@@ -43,10 +43,26 @@ class SkeletonMethodBinding
 
     using TypeErasedHandler = score::cpp::callback<TypeErasedCallbackSignature, CallbackSize>;
 
+    /// Completes a deferred call: the return value must be in place when it is called. Dropping it without calling it
+    /// answers the caller with an error.
+    using DeferredCompletion = score::cpp::callback<void(), 32U>;
+    using TypeErasedDeferredCallbackSignature = void(QualityType,
+                                                     std::optional<score::cpp::span<std::byte>>,
+                                                     std::optional<score::cpp::span<std::byte>>,
+                                                     DeferredCompletion&&);
+    using TypeErasedDeferredHandler = score::cpp::callback<TypeErasedDeferredCallbackSignature, CallbackSize>;
+
     SkeletonMethodBinding() = default;
     virtual ~SkeletonMethodBinding() = default;
 
     virtual Result<void> RegisterHandler(TypeErasedHandler&& callback) = 0;
+
+    /// \brief Registers a handler that may return before the call is done and complete it later from any thread.
+    ///
+    /// The caller stays blocked until the completion is called, but the skeleton's threads are free meanwhile, so the
+    /// handler can call other services' methods without a deadlock (issue #767). The argument spans stay valid until
+    /// the completion is called or the service stops being offered.
+    virtual Result<void> RegisterDeferredHandler(TypeErasedDeferredHandler&& callback) = 0;
 
     SkeletonMethodBinding(const SkeletonMethodBinding&) = delete;
     SkeletonMethodBinding& operator=(const SkeletonMethodBinding&) & = delete;

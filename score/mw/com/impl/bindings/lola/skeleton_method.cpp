@@ -40,7 +40,10 @@ namespace score::mw::com::impl::lola
 {
 
 SkeletonMethod::SkeletonMethod(Skeleton& skeleton, UniqueMethodIdentifier unique_method_identifier)
-    : type_erased_callback_{}, registration_guards_{}, registration_guards_mutex_{}
+    : type_erased_callback_{},
+      type_erased_deferred_callback_{},
+      registration_guards_{},
+      registration_guards_mutex_{}
 {
     skeleton.RegisterMethod(unique_method_identifier, *this);
 }
@@ -48,6 +51,15 @@ SkeletonMethod::SkeletonMethod(Skeleton& skeleton, UniqueMethodIdentifier unique
 Result<void> SkeletonMethod::RegisterHandler(SkeletonMethodBinding::TypeErasedHandler&& type_erased_callback)
 {
     type_erased_callback_ = std::move(type_erased_callback);
+    type_erased_deferred_callback_.reset();
+    return {};
+}
+
+Result<void> SkeletonMethod::RegisterDeferredHandler(
+    SkeletonMethodBinding::TypeErasedDeferredHandler&& type_erased_callback)
+{
+    type_erased_deferred_callback_ = std::move(type_erased_callback);
+    type_erased_callback_.reset();
     return {};
 }
 
@@ -62,41 +74,58 @@ Result<void> SkeletonMethod::OnProxyMethodSubscribeFinished(
     const QualityType asil_level)
 {
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(
-        type_erased_callback_.has_value(),
-        "Cannot register a method call handler without a registered handler from Register()!");
+        IsRegistered(), "Cannot register a method call handler without a registered handler from Register()!");
     // Note. the scope of the method call handler is owned by the parent Skeleton and will be expired during
     // StopOfferService.
-    IMessagePassingService::MethodCallHandler method_call_callback{
-        method_call_handler_scope,
-        [this, in_arg_queue_storage, return_queue_storage, type_erased_element_info, asil_level](
-            std::size_t queue_position) {
-            std::optional<score::cpp::span<std::byte>> in_args_element_storage{};
-            std::optional<score::cpp::span<std::byte>> return_arg_element_storage{};
-
-            if (type_erased_element_info.in_arg_type_info.has_value())
-            {
-                SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(in_arg_queue_storage.has_value());
-                in_args_element_storage = GetInArgValuesElementStorage(
-                    queue_position, in_arg_queue_storage.value(), type_erased_element_info);
-            }
-
-            if (type_erased_element_info.return_type_info.has_value())
-            {
-                SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(return_queue_storage.has_value());
-                return_arg_element_storage = GetReturnValueElementStorage(
-                    queue_position, return_queue_storage.value(), type_erased_element_info);
-            }
-
-            Call(asil_level, in_args_element_storage, return_arg_element_storage);
-        }};
+    auto element_storage = [in_arg_queue_storage, return_queue_storage, type_erased_element_info](
+                               std::size_t queue_position) {
+        std::optional<score::cpp::span<std::byte>> in_args_element_storage{};
+        std::optional<score::cpp::span<std::byte>> return_arg_element_storage{};
+        if (type_erased_element_info.in_arg_type_info.has_value())
+        {
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(in_arg_queue_storage.has_value());
+            in_args_element_storage =
+                GetInArgValuesElementStorage(queue_position, in_arg_queue_storage.value(), type_erased_element_info);
+        }
+        if (type_erased_element_info.return_type_info.has_value())
+        {
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(return_queue_storage.has_value());
+            return_arg_element_storage =
+                GetReturnValueElementStorage(queue_position, return_queue_storage.value(), type_erased_element_info);
+        }
+        return std::make_pair(in_args_element_storage, return_arg_element_storage);
+    };
 
     // Check SubscribeMethods for this skeleton_methods_ loop
     CleanUpOldHandlers(proxy_method_instance_identifier.proxy_instance_identifier.application_id, proxy_pid);
 
     auto& lola_runtime = GetBindingRuntime<lola::IRuntime>(BindingType::kLoLa);
     auto& lola_message_passing = lola_runtime.GetLolaMessaging();
-    auto registration_result = lola_message_passing.RegisterMethodCallHandler(
-        asil_level, proxy_method_instance_identifier, std::move(method_call_callback), allowed_proxy_uid);
+    auto registration_result = [&]() {
+        if (type_erased_deferred_callback_.has_value())
+        {
+            IMessagePassingService::AsyncMethodCallHandler method_call_callback{
+                method_call_handler_scope,
+                [this, element_storage, asil_level](std::size_t queue_position, MethodReply reply) {
+                    const auto [in_args, return_arg] = element_storage(queue_position);
+                    SkeletonMethodBinding::DeferredCompletion completion{[reply = std::move(reply)]() mutable {
+                        reply.Send({});
+                    }};
+                    std::invoke(type_erased_deferred_callback_.value(), asil_level, in_args, return_arg,
+                                std::move(completion));
+                }};
+            return lola_message_passing.RegisterAsyncMethodCallHandler(
+                asil_level, proxy_method_instance_identifier, std::move(method_call_callback), allowed_proxy_uid);
+        }
+        IMessagePassingService::MethodCallHandler method_call_callback{
+            method_call_handler_scope, [this, element_storage, asil_level](std::size_t queue_position) {
+                const auto [in_args, return_arg] = element_storage(queue_position);
+                Call(asil_level, in_args, return_arg);
+            }};
+        return lola_message_passing.RegisterMethodCallHandler(
+            asil_level, proxy_method_instance_identifier, std::move(method_call_callback), allowed_proxy_uid);
+    }();
+
     if (!(registration_result.has_value()))
     {
         return MakeUnexpected<void>(registration_result.error());
@@ -128,7 +157,7 @@ void SkeletonMethod::UnregisterMethodCallHandlers()
 
 bool SkeletonMethod::IsRegistered() const
 {
-    return type_erased_callback_.has_value();
+    return type_erased_callback_.has_value() || type_erased_deferred_callback_.has_value();
 }
 
 void SkeletonMethod::Call(const QualityType quality_type,

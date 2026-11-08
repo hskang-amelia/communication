@@ -61,6 +61,7 @@ cc_library(
     tags = ["FFI"],
     visibility = ["//score/mw/com/impl/bindings/lola:__pkg__"],
     deps = [
+        ":method_reply",
         "//score/mw/com/impl:scoped_event_receive_handler",
         "//score/mw/com/impl/bindings/lola:element_fq_id",
         "//score/mw/com/impl/bindings/lola:proxy_instance_identifier",
@@ -71,6 +72,34 @@ cc_library(
         "@score_baselibs//score/language/safecpp/scoped_function:copyable_scoped_function",
         "@score_baselibs//score/result",
         "@score_baselibs//score/scope_exit",
+    ],
+)
+
+cc_library(
+    name = "method_reply",
+    srcs = ["method_reply.cpp"],
+    hdrs = ["method_reply.h"],
+    implementation_deps = [
+        "//score/mw/com/impl:error_serializer",
+        "//score/mw/com/impl/bindings/lola/methods:method_error",
+        "@score_baselibs//score/mw/log",
+    ],
+    tags = ["FFI"],
+    deps = [
+        "@score_baselibs//score/language/futurecpp",
+        "@score_baselibs//score/result",
+        "@score_communication//score/message_passing",
+    ],
+)
+
+cc_library(
+    name = "method_call_dispatcher",
+    srcs = ["method_call_dispatcher.cpp"],
+    hdrs = ["method_call_dispatcher.h"],
+    tags = ["FFI"],
+    deps = [
+        ":method_reply",
+        "@score_baselibs//score/language/futurecpp",
     ],
 )
 
@@ -109,6 +138,7 @@ cc_library(
         ":client_quality_type",
         ":i_message_passing_service_instance",
         ":message_passing_client_cache",
+        ":method_call_dispatcher",
         ":thread_abstraction",
         "//score/mw/com/impl:error",
         "//score/mw/com/impl:error_serializer",
@@ -285,6 +315,22 @@ cc_unit_test(
 )
 
 cc_unit_test(
+    name = "method_reply_test",
+    srcs = ["method_reply_test.cpp"],
+    deps = [
+        ":method_reply",
+        "//score/mw/com/impl:error_serializer",
+        "//score/mw/com/impl/bindings/lola/methods:method_error",
+    ],
+)
+
+cc_unit_test(
+    name = "method_call_dispatcher_test",
+    srcs = ["method_call_dispatcher_test.cpp"],
+    deps = [":method_call_dispatcher"],
+)
+
+cc_unit_test(
     name = "message_passing_service_test",
     srcs = ["message_passing_service_test.cpp"],
     visibility = [
@@ -315,7 +361,6 @@ cc_unit_test(
     deps = [
         ":messaging",
         "@score_baselibs//score/language/futurecpp",
-        "@score_communication//score/message_passing:mock",
     ],
 )
 
@@ -330,7 +375,6 @@ cc_unit_test(
         "@score_baselibs//score/concurrency:executor_mock",
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/os/mocklib:unistd_mock",
-        "@score_communication//score/message_passing:mock",
     ],
 )
 
@@ -387,6 +431,5 @@ cc_unit_test(
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/language/futurecpp:futurecpp_test_support",
         "@score_baselibs//score/os/mocklib:unistd_mock",
-        "@score_communication//score/message_passing:mock",
     ],
 )

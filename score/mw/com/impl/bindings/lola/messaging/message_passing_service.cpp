@@ -196,6 +196,24 @@ Result<MethodCallRegistrationGuard> MessagePassingService::RegisterMethodCallHan
         *this, asil_level, proxy_method_instance_identifier, registration_guards_scope_);
 }
 
+Result<MethodCallRegistrationGuard> MessagePassingService::RegisterAsyncMethodCallHandler(
+    const QualityType asil_level,
+    ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+    AsyncMethodCallHandler method_call_callback,
+    uid_t allowed_proxy_uid)
+{
+    auto& instance = GetMessagePassingServiceInstance(asil_level);
+
+    const auto result = instance.RegisterAsyncMethodCallHandler(
+        proxy_method_instance_identifier, std::move(method_call_callback), allowed_proxy_uid);
+    if (!(result.has_value()))
+    {
+        return MakeUnexpected<MethodCallRegistrationGuard>(result.error());
+    }
+    return MethodCallRegistrationGuardFactory::Create(
+        *this, asil_level, proxy_method_instance_identifier, registration_guards_scope_);
+}
+
 void MessagePassingService::RegisterEventNotificationExistenceChangedCallback(
     const QualityType asil_level,
     const ElementFqId event_id,

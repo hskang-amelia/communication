@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 
 namespace score::mw::com::impl::lola
@@ -31,6 +32,16 @@ struct AsilSpecificCfg
     std::int32_t message_queue_rx_size_;
     // coverity[autosar_cpp14_m11_0_1_violation]
     std::vector<uid_t> allowed_user_ids_;
+    /// Handlers that run at a time. 0 runs them on the message passing thread (handlers then must not call other
+    /// services' methods, see issue #767). With 1 they run one at a time, in arrival order.
+    // coverity[autosar_cpp14_m11_0_1_violation]
+    std::size_t method_call_threads_{1U};
+    /// Threads in all; the ones above method_call_threads_ only serve calls while handlers wait in method calls.
+    // coverity[autosar_cpp14_m11_0_1_violation]
+    std::size_t method_call_max_threads_{4U};
+    /// Method calls that may wait for a dispatcher thread; a call beyond that is answered with kCallQueueFull.
+    // coverity[autosar_cpp14_m11_0_1_violation]
+    std::size_t method_call_queue_size_{16U};
 };
 }  // namespace score::mw::com::impl::lola
 

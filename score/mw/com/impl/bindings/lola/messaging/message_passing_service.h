@@ -125,6 +125,14 @@ class MessagePassingService final : public IMessagePassingService
         MethodCallHandler method_call_callback,
         uid_t allowed_proxy_uid) override;
 
+    /// \brief Register a handler on Skeleton side which replies later.
+    /// \details see IMessagePassingService::RegisterAsyncMethodCallHandler
+    Result<MethodCallRegistrationGuard> RegisterAsyncMethodCallHandler(
+        const QualityType asil_level,
+        ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+        AsyncMethodCallHandler method_call_callback,
+        uid_t allowed_proxy_uid) override;
+
     /// \brief Notifies target node about outdated_node_id being an old/outdated node id, not being used anymore.
     /// \details see IMessagePassingService::NotifyOutdatedNodeId
     void NotifyOutdatedNodeId(const QualityType asil_level,

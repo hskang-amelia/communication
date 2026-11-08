@@ -1,0 +1,41 @@
+' *******************************************************************************
+' Copyright (c) 2026 Contributors to the Eclipse Foundation
+'
+' See the NOTICE file(s) distributed with this work for additional
+' information regarding copyright ownership.
+'
+' This program and the accompanying materials are made available under the
+' terms of the Apache License Version 2.0 which is available at
+' https://www.apache.org/licenses/LICENSE-2.0
+'
+' SPDX-License-Identifier: Apache-2.0
+' *******************************************************************************
+
+@startuml lola_msg_pass_method_call_seq
+title "Sequence Method Call with nested call in the handler"
+hide footbox
+
+participant "Proxy (C)" as C
+participant "message passing\nthread (P)" as MP
+participant ":MethodCallDispatcher\n(P)" as D
+participant "handler (P)" as H
+participant "Skeleton (R)" as R
+
+C -> MP : CallMethod (SendWaitReply)
+MP -> D : Submit(job with MethodReply)
+MP --> MP : return without reply
+D -> H : run handler
+H -> H : BlockingCallScope\n(slot lent to a spare thread)
+H -> R : CallMethod (SendWaitReply)
+R --> MP : reply
+MP --> H : wake caller
+H -> MP : MethodReply::Send()
+MP --> C : reply
+
+note over D
+  queue full -> kCallQueueFull at once
+  no spare thread left -> kNoCallThreadLeft
+  MethodReply dropped -> kSkeletonAlreadyDestroyed
+  disconnect -> ReplyGate closed, later Send dropped
+end note
+@enduml

@@ -53,6 +53,10 @@ class MessagePassingServiceInstanceMock : public IMessagePassingServiceInstance
                 RegisterMethodCallHandler,
                 (ProxyMethodInstanceIdentifier, IMessagePassingService::MethodCallHandler, uid_t),
                 (override));
+    MOCK_METHOD(Result<void>,
+                RegisterAsyncMethodCallHandler,
+                (ProxyMethodInstanceIdentifier, IMessagePassingService::AsyncMethodCallHandler, uid_t),
+                (override));
 
     MOCK_METHOD(void, NotifyOutdatedNodeId, (const pid_t, const pid_t), (noexcept, override));
 

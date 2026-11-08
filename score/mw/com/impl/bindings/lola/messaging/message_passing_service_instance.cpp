@@ -189,7 +189,8 @@ bool IsMethodErrorRecoverable(const score::result::Error error)
     if ((error_code == static_cast<result::ErrorCode>(MethodErrc::kSkeletonAlreadyDestroyed)) ||
         (error_code == static_cast<result::ErrorCode>(MethodErrc::kUnknownProxy)) ||
         (error_code == static_cast<result::ErrorCode>(MethodErrc::kNotSubscribed)) ||
-        (error_code == static_cast<result::ErrorCode>(MethodErrc::kNotOffered)))
+        (error_code == static_cast<result::ErrorCode>(MethodErrc::kNotOffered)) ||
+        (error_code == static_cast<result::ErrorCode>(MethodErrc::kCallQueueFull)))
     {
         return true;
     }
@@ -211,7 +212,7 @@ bool IsMethodErrorRecoverable(const score::result::Error error)
 
 MessagePassingServiceInstance::MessagePassingServiceInstance(
     const ClientQualityType asil_level,
-    const AsilSpecificCfg& /*config*/,
+    const AsilSpecificCfg& config,
     score::message_passing::IServerFactory& server_factory,
     score::message_passing::IClientFactory& client_factory,
     score::concurrency::Executor& local_event_executor) noexcept
@@ -231,6 +232,13 @@ MessagePassingServiceInstance::MessagePassingServiceInstance(
       subscribe_service_method_handlers_mutex_{},
       call_method_handlers_{},
       call_method_handlers_mutex_{},
+      reply_gates_{},
+      reply_gates_mutex_{},
+      method_call_dispatcher_{config.method_call_threads_ > 0U
+                                  ? std::make_unique<MethodCallDispatcher>(config.method_call_threads_,
+                                                                           config.method_call_max_threads_,
+                                                                           config.method_call_queue_size_)
+                                  : nullptr},
       executor_{local_event_executor},
       message_callback_scope_{},
       self_pid_{os::Unistd::instance().getpid()},
@@ -247,9 +255,9 @@ MessagePassingServiceInstance::MessagePassingServiceInstance(
         const pid_t client_pid = connection.GetClientIdentity().pid;
         return static_cast<std::uintptr_t>(client_pid);
     };
-    auto disconnect_callback = [](score::message_passing::IServerConnection& /*connection*/) noexcept {
+    auto disconnect_callback = [this](score::message_passing::IServerConnection& connection) noexcept {
         // TODO: outdated node id?
-        // TODO: update related unit test as well
+        CloseReplyGate(connection);
     };
 
     auto message_callback_scoped_function =
@@ -306,11 +314,13 @@ MessagePassingServiceInstance::MessagePassingServiceInstance(
 message_passing::MessageCallback MessagePassingServiceInstance::CreateSendMessageWithReplyCallback()
 {
     auto message_callback_with_reply_scoped_function = std::make_shared<score::safecpp::MoveOnlyScopedFunction<
-        score::Result<void>(uid_t, pid_t, score::cpp::span<const std::uint8_t>)>>(
+        ReplyOrDeferred(score::message_passing::IServerConnection&, uid_t, pid_t, score::cpp::span<const std::uint8_t>)>>(
         message_callback_scope_,
-        [this](
-            uid_t sender_uid, pid_t sender_pid, score::cpp::span<const std::uint8_t> message) -> score::Result<void> {
-            return this->MessageCallbackWithReply(sender_uid, sender_pid, message);
+        [this](score::message_passing::IServerConnection& connection,
+               uid_t sender_uid,
+               pid_t sender_pid,
+               score::cpp::span<const std::uint8_t> message) -> ReplyOrDeferred {
+            return this->MessageCallbackWithReply(connection, sender_uid, sender_pid, message);
         });
 
     // Note. When received_send_message_with_reply_callback returns an error, the message passing connection with the
@@ -329,7 +339,7 @@ message_passing::MessageCallback MessagePassingServiceInstance::CreateSendMessag
             message_callback_with_reply_scoped_function != nullptr,
             "Message callback with reply callable was not properly constructed");
         auto function_invocation_result =
-            std::invoke(*message_callback_with_reply_scoped_function, client_uid, client_pid, message);
+            std::invoke(*message_callback_with_reply_scoped_function, connection, client_uid, client_pid, message);
         if (!(function_invocation_result.has_value()))
         {
             score::mw::log::LogError("lola")
@@ -345,7 +355,12 @@ message_passing::MessageCallback MessagePassingServiceInstance::CreateSendMessag
             return {};
         }
 
-        const auto& message_handling_result = function_invocation_result.value();
+        if (!(function_invocation_result.value().has_value()))
+        {
+            // The reply is sent later, through the connection's ReplyGate.
+            return {};
+        }
+        const auto& message_handling_result = function_invocation_result.value().value();
         const auto did_message_handling_fail_unrecoverable =
             !(message_handling_result.has_value()) && (!IsMethodErrorRecoverable(message_handling_result.error()));
 
@@ -414,7 +429,8 @@ void MessagePassingServiceInstance::MessageCallback(const pid_t sender_pid,
     }
 }
 
-score::Result<void> MessagePassingServiceInstance::MessageCallbackWithReply(
+MessagePassingServiceInstance::ReplyOrDeferred MessagePassingServiceInstance::MessageCallbackWithReply(
+    score::message_passing::IServerConnection& connection,
     const uid_t sender_uid,
     const pid_t sender_pid,
     const score::cpp::span<const std::uint8_t> message)
@@ -441,7 +457,7 @@ score::Result<void> MessagePassingServiceInstance::MessageCallbackWithReply(
         // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageWithReplyType::kCallMethod):
         {
-            return HandleCallMethodMsg(payload, sender_uid);
+            return HandleCallMethodMsg(connection, payload, sender_uid);
         }
         default:
         {
@@ -647,7 +663,8 @@ score::Result<void> MessagePassingServiceInstance::HandleUnsubscribeServiceMetho
                                                unserialized_payload.proxy_instance_identifier);
 }
 
-score::Result<void> MessagePassingServiceInstance::HandleCallMethodMsg(
+MessagePassingServiceInstance::ReplyOrDeferred MessagePassingServiceInstance::HandleCallMethodMsg(
+    score::message_passing::IServerConnection& connection,
     const score::cpp::span<const std::uint8_t> payload,
     const uid_t sender_uid)
 {
@@ -655,11 +672,110 @@ score::Result<void> MessagePassingServiceInstance::HandleCallMethodMsg(
     MethodCallUnserializedPayload unserialized_payload{};
     if (!DeserializeFromPayload(payload, unserialized_payload))
     {
-        return MakeUnexpected(MethodErrc::kUnexpectedMessageSize);
+        return score::Result<void>{MakeUnexpected(MethodErrc::kUnexpectedMessageSize)};
     }
 
-    return CallServiceMethodLocally(
-        unserialized_payload.proxy_method_instance_identifier, unserialized_payload.queue_position, sender_uid);
+    auto handler = FindMethodCallHandler(unserialized_payload.proxy_method_instance_identifier, sender_uid);
+    if (!(handler.has_value()))
+    {
+        return score::Result<void>{MakeUnexpected<void>(handler.error())};
+    }
+    const bool is_async = std::holds_alternative<IMessagePassingService::AsyncMethodCallHandler>(handler.value());
+    if ((method_call_dispatcher_ == nullptr) && (!is_async))
+    {
+        // No dispatcher: run the handler here and reply right away, as before.
+        auto invocation_result =
+            std::invoke(std::get<IMessagePassingService::MethodCallHandler>(handler.value()),
+                        unserialized_payload.queue_position);
+        if (!(invocation_result.has_value()))
+        {
+            return score::Result<void>{MakeUnexpected(MethodErrc::kSkeletonAlreadyDestroyed)};
+        }
+        return score::Result<void>{};
+    }
+    DispatchMethodCall(
+        std::move(handler).value(), unserialized_payload.queue_position, MethodReply{GetReplyGate(connection)});
+    return std::nullopt;
+}
+
+std::shared_ptr<ReplyGate> MessagePassingServiceInstance::GetReplyGate(
+    score::message_passing::IServerConnection& connection)
+{
+    std::lock_guard<std::mutex> lock{reply_gates_mutex_};
+    auto& gate = reply_gates_[&connection];
+    if (gate == nullptr)
+    {
+        gate = std::make_shared<ReplyGate>(connection);
+    }
+    return gate;
+}
+
+void MessagePassingServiceInstance::CloseReplyGate(score::message_passing::IServerConnection& connection) noexcept
+{
+    std::shared_ptr<ReplyGate> gate{};
+    {
+        std::lock_guard<std::mutex> lock{reply_gates_mutex_};
+        const auto it = reply_gates_.find(&connection);
+        if (it == reply_gates_.end())
+        {
+            return;
+        }
+        gate = std::move(it->second);
+        reply_gates_.erase(it);
+    }
+    gate->Close();
+}
+
+void MessagePassingServiceInstance::DispatchMethodCall(AnyMethodCallHandler handler,
+                                                       const std::size_t queue_position,
+                                                       MethodReply reply)
+{
+    if (method_call_dispatcher_ == nullptr)
+    {
+        RunMethodCall(handler, queue_position, std::move(reply));
+        return;
+    }
+    MethodCallDispatcher::Job job{
+        [handler = std::move(handler), queue_position, reply = std::move(reply)](const bool run) mutable {
+            if (run)
+            {
+                RunMethodCall(handler, queue_position, std::move(reply));
+            }
+            else
+            {
+                reply.Send(MakeUnexpected(MethodErrc::kCallQueueFull));
+            }
+        }};
+    if (!method_call_dispatcher_->Submit(job))
+    {
+        score::mw::log::LogWarn("lola") << "Method call queue is full; rejecting the call.";
+        job(false);
+    }
+}
+
+void MessagePassingServiceInstance::RunMethodCall(AnyMethodCallHandler& handler,
+                                                  const std::size_t queue_position,
+                                                  MethodReply reply)
+{
+    if (auto* async_handler = std::get_if<IMessagePassingService::AsyncMethodCallHandler>(&handler))
+    {
+        auto invocation_result = std::invoke(*async_handler, queue_position, std::move(reply));
+        if (!(invocation_result.has_value()))
+        {
+            mw::log::LogError("lola") << "Method call handler scope expired: SkeletonMethod already destroyed.";
+        }
+        // A reply that the expired handler did not take answers kSkeletonAlreadyDestroyed when it is destroyed.
+        return;
+    }
+    auto invocation_result =
+        std::invoke(std::get<IMessagePassingService::MethodCallHandler>(handler), queue_position);
+    if (!(invocation_result.has_value()))
+    {
+        mw::log::LogError("lola") << "Method call handler scope expired: SkeletonMethod already destroyed.";
+        reply.Send(MakeUnexpected(MethodErrc::kSkeletonAlreadyDestroyed));
+        return;
+    }
+    reply.Send({});
 }
 
 score::Result<void> MessagePassingServiceInstance::CallSubscribeServiceMethodLocally(
@@ -733,10 +849,9 @@ score::Result<void> MessagePassingServiceInstance::CallUnsubscribeServiceMethodL
     return invocation_result.value();
 }
 
-score::Result<void> MessagePassingServiceInstance::CallServiceMethodLocally(
-    const ProxyMethodInstanceIdentifier& proxy_method_instance_identifier,
-    const std::size_t queue_position,
-    const uid_t proxy_uid)
+score::Result<MessagePassingServiceInstance::AnyMethodCallHandler>
+MessagePassingServiceInstance::FindMethodCallHandler(const ProxyMethodInstanceIdentifier& proxy_method_instance_identifier,
+                                                     const uid_t proxy_uid)
 {
     // A copy of the handler is made under lock and called outside the lock to allow calling multiple handlers at once
     // and to also allow registering a new method call handler for the same ProxyInstanceIdentifier while an old
@@ -763,14 +878,35 @@ score::Result<void> MessagePassingServiceInstance::CallServiceMethodLocally(
                                      "not the same one that registered the handler.";
         return MakeUnexpected(MethodErrc::kUnknownProxy);
     }
-    auto invocation_result = std::invoke(method_call_handler_copy, queue_position);
-    if (!(invocation_result.has_value()))
+    return method_call_handler_copy;
+}
+
+score::Result<void> MessagePassingServiceInstance::CallServiceMethodLocally(
+    const ProxyMethodInstanceIdentifier& proxy_method_instance_identifier,
+    const std::size_t queue_position,
+    const uid_t proxy_uid)
+{
+    auto handler = FindMethodCallHandler(proxy_method_instance_identifier, proxy_uid);
+    if (!(handler.has_value()))
     {
-        mw::log::LogError("lola") << "Invocation of method call handler failed as scope has been destroyed: "
-                                     "SkeletonMethod has already been destroyed.";
-        return MakeUnexpected(MethodErrc::kSkeletonAlreadyDestroyed);
+        return MakeUnexpected<void>(handler.error());
     }
-    return {};
+    if (auto* sync_handler = std::get_if<IMessagePassingService::MethodCallHandler>(&handler.value()))
+    {
+        // Same process: the caller's own thread runs the handler, as before.
+        auto invocation_result = std::invoke(*sync_handler, queue_position);
+        if (!(invocation_result.has_value()))
+        {
+            mw::log::LogError("lola") << "Invocation of method call handler failed as scope has been destroyed: "
+                                         "SkeletonMethod has already been destroyed.";
+            return MakeUnexpected(MethodErrc::kSkeletonAlreadyDestroyed);
+        }
+        return {};
+    }
+    auto gate = std::make_shared<ReplyGate>();
+    RunMethodCall(handler.value(), queue_position, MethodReply{gate});
+    const BlockingCallScope blocking{};
+    return gate->WaitLocal();
 }
 
 Result<void> MessagePassingServiceInstance::CallSubscribeServiceMethodRemotely(
@@ -849,6 +985,13 @@ Result<void> MessagePassingServiceInstance::CallServiceMethodRemotely(
         SerializeToMessage(score::cpp::to_underlying(MessageWithReplyType::kCallMethod), unserialized_payload);
     auto sender = client_cache_.GetMessagePassingClient(target_node_id);
 
+    const BlockingCallScope blocking{};
+    if (!blocking.Allowed())
+    {
+        score::mw::log::LogError("lola") << "MessagePassingService: Method call refused: every method call thread of "
+                                            "this process would be waiting for a reply.";
+        return MakeUnexpected(MethodErrc::kNoCallThreadLeft);
+    }
     std::array<std::uint8_t, sizeof(MethodReplyPayload)> reply{};
     score::cpp::span<std::uint8_t> reply_buffer{reply.data(), reply.size()};
     const auto send_wait_reply_result = sender->SendWaitReply(message, reply_buffer);
@@ -1275,6 +1418,33 @@ Result<void> MessagePassingServiceInstance::RegisterOnServiceMethodUnsubscribedH
     return {};
 }
 
+MessagePassingServiceInstance::~MessagePassingServiceInstance() noexcept
+{
+    // Handlers that are running finish; queued ones are dropped and their callers told kSkeletonAlreadyDestroyed.
+    if (method_call_dispatcher_ != nullptr)
+    {
+        method_call_dispatcher_->Stop();
+    }
+}
+
+Result<void> MessagePassingServiceInstance::RegisterAsyncMethodCallHandler(
+    const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+    IMessagePassingService::AsyncMethodCallHandler method_call_callback,
+    const uid_t allowed_proxy_uid)
+{
+    std::unique_lock<std::shared_mutex> write_lock(call_method_handlers_mutex_);
+
+    const auto insertion_result = call_method_handlers_.insert(
+        {proxy_method_instance_identifier,
+         {AnyMethodCallHandler{std::move(method_call_callback)}, allowed_proxy_uid}});
+    SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(
+        insertion_result.second,
+        "A previous handler registered for this ProxyMethodInstanceIdentifier must be unregistered by the caller (by "
+        "destroying its registration guard) before registering the new handler.");
+
+    return {};
+}
+
 Result<void> MessagePassingServiceInstance::RegisterMethodCallHandler(
     const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
     IMessagePassingService::MethodCallHandler method_call_callback,
@@ -1283,7 +1453,8 @@ Result<void> MessagePassingServiceInstance::RegisterMethodCallHandler(
     std::unique_lock<std::shared_mutex> write_lock(call_method_handlers_mutex_);
 
     const auto insertion_result = call_method_handlers_.insert(
-        {proxy_method_instance_identifier, {std::move(method_call_callback), allowed_proxy_uid}});
+        {proxy_method_instance_identifier,
+         {AnyMethodCallHandler{std::move(method_call_callback)}, allowed_proxy_uid}});
     SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(
         insertion_result.second,
         "A previous handler registered for this ProxyMethodInstanceIdentifier must be unregistered by the caller (by "

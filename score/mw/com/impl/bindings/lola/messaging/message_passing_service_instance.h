@@ -17,6 +17,8 @@
 #include "score/mw/com/impl/bindings/lola/messaging/i_message_passing_service.h"
 #include "score/mw/com/impl/bindings/lola/messaging/i_message_passing_service_instance.h"
 #include "score/mw/com/impl/bindings/lola/messaging/message_passing_client_cache.h"
+#include "score/mw/com/impl/bindings/lola/messaging/method_call_dispatcher.h"
+#include "score/mw/com/impl/bindings/lola/messaging/method_reply.h"
 #include "score/mw/com/impl/bindings/lola/proxy_instance_identifier.h"
 #include "score/mw/com/impl/bindings/lola/skeleton_instance_identifier.h"
 
@@ -36,6 +38,9 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <optional>
+#include <variant>
+#include <mutex>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
@@ -65,7 +70,7 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
     MessagePassingServiceInstance& operator=(const MessagePassingServiceInstance&) = delete;
     MessagePassingServiceInstance& operator=(MessagePassingServiceInstance&&) = delete;
 
-    ~MessagePassingServiceInstance() noexcept override = default;
+    ~MessagePassingServiceInstance() noexcept override;
 
     void NotifyEvent(const ElementFqId event_id) noexcept override;
 
@@ -92,6 +97,10 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
     Result<void> RegisterMethodCallHandler(const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
                                            IMessagePassingService::MethodCallHandler method_call_callback,
                                            const uid_t allowed_proxy_uid) override;
+
+    Result<void> RegisterAsyncMethodCallHandler(const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+                                                IMessagePassingService::AsyncMethodCallHandler method_call_callback,
+                                                const uid_t allowed_proxy_uid) override;
 
     void UnregisterOnServiceMethodSubscribedHandler(
         const SkeletonInstanceIdentifier skeleton_instance_identifier) override;
@@ -186,8 +195,12 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
     using SubscribeServiceMethodMapType = std::unordered_map<
         SkeletonInstanceIdentifier,
         std::pair<IMessagePassingService::ServiceMethodSubscribedHandler, IMessagePassingService::AllowedConsumerUids>>;
+    using AnyMethodCallHandler =
+        std::variant<IMessagePassingService::MethodCallHandler, IMessagePassingService::AsyncMethodCallHandler>;
     using CallMethodMapType =
-        std::unordered_map<ProxyMethodInstanceIdentifier, std::pair<IMessagePassingService::MethodCallHandler, uid_t>>;
+        std::unordered_map<ProxyMethodInstanceIdentifier, std::pair<AnyMethodCallHandler, uid_t>>;
+    /// Result of handling a message with reply: no value means the reply is sent later.
+    using ReplyOrDeferred = std::optional<score::Result<void>>;
 
     /// \brief tmp buffer for copying ids under lock.
     /// \todo Make its size configurable?
@@ -196,9 +209,10 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
     message_passing::MessageCallback CreateSendMessageWithReplyCallback();
 
     void MessageCallback(const pid_t sender_pid, const score::cpp::span<const std::uint8_t> message) noexcept;
-    score::Result<void> MessageCallbackWithReply(const uid_t sender_uid,
-                                                 const pid_t sender_pid,
-                                                 const score::cpp::span<const std::uint8_t> message);
+    ReplyOrDeferred MessageCallbackWithReply(score::message_passing::IServerConnection& connection,
+                                             const uid_t sender_uid,
+                                             const pid_t sender_pid,
+                                             const score::cpp::span<const std::uint8_t> message);
     void HandleNotifyEventMsg(const score::cpp::span<const std::uint8_t> payload, const pid_t sender_node_id) noexcept;
     void HandleRegisterNotificationMsg(const score::cpp::span<const std::uint8_t> payload,
                                        const pid_t sender_node_id) noexcept;
@@ -211,7 +225,14 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
                                                         const pid_t sender_node_id);
     score::Result<void> HandleUnsubscribeServiceMethodMsg(const score::cpp::span<const std::uint8_t> payload,
                                                           const pid_t sender_node_id);
-    score::Result<void> HandleCallMethodMsg(const score::cpp::span<const std::uint8_t> payload, const uid_t sender_uid);
+    ReplyOrDeferred HandleCallMethodMsg(score::message_passing::IServerConnection& connection,
+                                        const score::cpp::span<const std::uint8_t> payload,
+                                        const uid_t sender_uid);
+    std::shared_ptr<ReplyGate> GetReplyGate(score::message_passing::IServerConnection& connection);
+    void CloseReplyGate(score::message_passing::IServerConnection& connection) noexcept;
+    /// Runs the handler for one call: on a dispatcher thread if there is one, otherwise right here.
+    void DispatchMethodCall(AnyMethodCallHandler handler, std::size_t queue_position, MethodReply reply);
+    static void RunMethodCall(AnyMethodCallHandler& handler, std::size_t queue_position, MethodReply reply);
 
     std::uint32_t NotifyEventLocally(const ElementFqId event_id) noexcept;
     void NotifyEventRemote(const ElementFqId event_id) noexcept;
@@ -231,6 +252,10 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
         const SkeletonInstanceIdentifier& skeleton_instance_identifier,
         const ProxyInstanceIdentifier& proxy_instance_identifier);
 
+    /// Looks up and checks the handler for a call. On success the caller runs it.
+    score::Result<AnyMethodCallHandler> FindMethodCallHandler(
+        const ProxyMethodInstanceIdentifier& proxy_method_instance_identifier,
+        const uid_t proxy_uid);
     score::Result<void> CallServiceMethodLocally(const ProxyMethodInstanceIdentifier& proxy_method_instance_identifier,
                                                  const std::size_t queue_position,
                                                  const uid_t proxy_uid);
@@ -372,6 +397,13 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
     CallMethodMapType call_method_handlers_;
 
     std::shared_mutex call_method_handlers_mutex_;
+
+    /// \brief One gate per client connection that has a method reply outstanding; closed on disconnect.
+    std::unordered_map<const score::message_passing::IServerConnection*, std::shared_ptr<ReplyGate>> reply_gates_;
+    std::mutex reply_gates_mutex_;
+
+    /// \brief Runs method call handlers off the message passing thread; null when configured with 0 threads.
+    std::unique_ptr<MethodCallDispatcher> method_call_dispatcher_;
 
     /// \brief executor for processing local event update notification.
     /// \detail local update notification leads to a user provided receive handler callout, whose

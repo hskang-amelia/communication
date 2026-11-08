@@ -62,6 +62,11 @@ class IMessagePassingServiceInstance
                                                    IMessagePassingService::MethodCallHandler method_call_callback,
                                                    const uid_t allowed_proxy_uid) = 0;
 
+    virtual Result<void> RegisterAsyncMethodCallHandler(
+        const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+        IMessagePassingService::AsyncMethodCallHandler method_call_callback,
+        const uid_t allowed_proxy_uid) = 0;
+
     virtual void UnregisterOnServiceMethodSubscribedHandler(
         SkeletonInstanceIdentifier skeleton_instance_identifier) = 0;
 

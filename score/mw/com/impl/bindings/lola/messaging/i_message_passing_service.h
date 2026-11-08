@@ -15,6 +15,7 @@
 
 #include "score/mw/com/impl/bindings/lola/element_fq_id.h"
 #include "score/mw/com/impl/bindings/lola/messaging/method_call_registration_guard.h"
+#include "score/mw/com/impl/bindings/lola/messaging/method_reply.h"
 #include "score/mw/com/impl/bindings/lola/messaging/method_subscription_registration_guard.h"
 #include "score/mw/com/impl/bindings/lola/messaging/method_unsubscription_registration_guard.h"
 #include "score/mw/com/impl/bindings/lola/methods/proxy_method_instance_identifier.h"
@@ -111,9 +112,18 @@ class IMessagePassingService
     /// memory region which was created by the restarted Proxy). We use a CopyableScopedFunction rather than moving
     /// the handler out of the map under lock, calling it outside the lock and moving it back in under lock to
     /// reduce the number of mutex locks and also avoid potential reallocations when inserting it back into the map.
-    /// Only one copy of the handler will ever be called at one time, so the provided handler does not need to
-    /// ensure it can safely be called concurrently.
+    /// The handler runs on the method call dispatcher's threads, not on the message passing thread, so it may call
+    /// other services' methods. With the default of one dispatcher thread, only one handler runs at a time, so the
+    /// provided handler does not need to ensure it can safely be called concurrently.
     using MethodCallHandler = safecpp::CopyableScopedFunction<void(std::size_t queue_position)>;
+
+    /// \brief Handler for a method call whose result is sent later.
+    ///
+    /// The handler gets the call's MethodReply and returns without waiting for the result; whoever finishes the work
+    /// calls MethodReply::Send(), from any thread. The return value must be written to the method's shared memory
+    /// before that. If the reply is destroyed unsent, the caller gets kSkeletonAlreadyDestroyed.
+    using AsyncMethodCallHandler =
+        safecpp::CopyableScopedFunction<void(std::size_t queue_position, MethodReply reply)>;
 
     /// \brief Allowed consumer uids which define which processes can subscribe to and call service methods.
     ///
@@ -255,6 +265,13 @@ class IMessagePassingService
         const QualityType asil_level,
         const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
         MethodCallHandler method_call_callback,
+        const uid_t allowed_proxy_uid) = 0;
+
+    /// \brief Same as RegisterMethodCallHandler, for a handler that replies later (see AsyncMethodCallHandler).
+    virtual Result<MethodCallRegistrationGuard> RegisterAsyncMethodCallHandler(
+        const QualityType asil_level,
+        const ProxyMethodInstanceIdentifier proxy_method_instance_identifier,
+        AsyncMethodCallHandler method_call_callback,
         const uid_t allowed_proxy_uid) = 0;
 
     /// \brief Notify given target_node_id about outdated_node_id being an old/not to be used node identifier.

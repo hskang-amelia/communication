@@ -1425,6 +1425,8 @@ MessagePassingServiceInstance::~MessagePassingServiceInstance() noexcept
     {
         method_call_dispatcher_->Stop();
     }
+    // The server's disconnect callback uses reply_gates_, which is destroyed before server_.
+    server_.reset();
 }
 
 Result<void> MessagePassingServiceInstance::RegisterAsyncMethodCallHandler(

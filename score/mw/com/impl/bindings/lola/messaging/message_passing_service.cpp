@@ -53,6 +53,9 @@ MessagePassingService::MessagePassingService(
       client_factory_{score::cpp::pmr::make_shared<Engine>(score::cpp::pmr::get_default_resource(),
                                                            score::cpp::pmr::get_default_resource(),
                                                            GetMwLogLogger())},
+      server_engine_{score::cpp::pmr::make_shared<Engine>(score::cpp::pmr::get_default_resource(),
+                                                          score::cpp::pmr::get_default_resource(),
+                                                          GetMwLogLogger())},
       // Suppress "AUTOSAR C++14 A15-4-2" rule findings. This rule states: "Throwing an exception in a
       // "noexcept" function." In this case it is ok, because the system anyways forces the process to
       // terminate if an exception is thrown.
@@ -61,7 +64,7 @@ MessagePassingService::MessagePassingService(
       qm_{},
       asil_b_{}
 {
-    ServerFactory server_factory{client_factory_.GetEngine()};
+    ServerFactory server_factory{server_engine_};
 
     const auto qm_client_quality_type =
         config_asil_b.has_value() ? ClientQualityType::kASIL_QMfromB : ClientQualityType::kASIL_QM;

@@ -186,6 +186,11 @@ class MessagePassingService final : public IMessagePassingService
 
     ClientFactory client_factory_;
 
+    /// \brief Engine (thread) for the server side, separate from client_factory_'s engine.
+    /// \detail A method handler, or a thread it waits for, may call another service's method. The reply to that call
+    ///         is delivered by the client engine, so it must not be the thread running the handler (issue #767).
+    std::shared_ptr<Engine> server_engine_;
+
     /// \brief thread pool for processing local event update notification.
     /// \detail local update notification leads to a user provided receive handler callout, whose
     ///         runtime is unknown, so we decouple with worker threads.

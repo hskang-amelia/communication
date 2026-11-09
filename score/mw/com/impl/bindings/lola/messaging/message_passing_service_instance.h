@@ -35,6 +35,8 @@
 // TODO: PMR
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -43,6 +45,7 @@
 #include <mutex>
 #include <set>
 #include <shared_mutex>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -230,6 +233,7 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
                                         const uid_t sender_uid);
     std::shared_ptr<ReplyGate> GetReplyGate(score::message_passing::IServerConnection& connection);
     void CloseReplyGate(score::message_passing::IServerConnection& connection) noexcept;
+    void RunReplyWatchdog() noexcept;
     /// Runs the handler for one call: on a dispatcher thread if there is one, otherwise right here.
     void DispatchMethodCall(AnyMethodCallHandler handler, std::size_t queue_position, MethodReply reply);
     static void RunMethodCall(AnyMethodCallHandler& handler, std::size_t queue_position, MethodReply reply);
@@ -404,6 +408,13 @@ class MessagePassingServiceInstance : public IMessagePassingServiceInstance
 
     /// \brief Runs method call handlers off the message passing thread; null when configured with 0 threads.
     std::unique_ptr<MethodCallDispatcher> method_call_dispatcher_;
+
+    /// \brief Deadline for answering a deferred method call; zero: none.
+    std::chrono::milliseconds reply_timeout_;
+    std::mutex reply_watchdog_mutex_{};
+    std::condition_variable reply_watchdog_condition_{};
+    bool reply_watchdog_stop_{false};
+    std::thread reply_watchdog_{};
 
     /// \brief executor for processing local event update notification.
     /// \detail local update notification leads to a user provided receive handler callout, whose

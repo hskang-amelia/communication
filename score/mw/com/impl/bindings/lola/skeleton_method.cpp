@@ -108,11 +108,15 @@ Result<void> SkeletonMethod::OnProxyMethodSubscribeFinished(
                 method_call_handler_scope,
                 [this, element_storage, asil_level](std::size_t queue_position, MethodReply reply) {
                     const auto [in_args, return_arg] = element_storage(queue_position);
-                    SkeletonMethodBinding::DeferredCompletion completion{[reply = std::move(reply)]() mutable {
-                        reply.Send({});
-                    }};
-                    std::invoke(type_erased_deferred_callback_.value(), asil_level, in_args, return_arg,
-                                std::move(completion));
+                    SkeletonMethodBinding::DeferredCompletion completion{
+                        [reply = std::move(reply), return_arg = return_arg](
+                            SkeletonMethodBinding::ReturnWriter&& writer) mutable {
+                            score::cpp::callback<void()> write{[&writer, &return_arg]() {
+                                writer(return_arg);
+                            }};
+                            return reply.Complete(write);
+                        }};
+                    std::invoke(type_erased_deferred_callback_.value(), asil_level, in_args, std::move(completion));
                 }};
             return lola_message_passing.RegisterAsyncMethodCallHandler(
                 asil_level, proxy_method_instance_identifier, std::move(method_call_callback), allowed_proxy_uid);

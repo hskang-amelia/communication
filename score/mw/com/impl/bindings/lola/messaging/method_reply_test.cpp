@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -66,7 +67,8 @@ MethodErrc ErrorOf(const std::vector<std::uint8_t>& reply)
 TEST(MethodReplyTest, SendRepliesOnceOverTheConnection)
 {
     FakeConnection connection{};
-    MethodReply reply{std::make_shared<ReplyGate>(connection)};
+    auto reply_gate = std::make_shared<ReplyGate>(connection);
+    MethodReply reply{reply_gate, reply_gate->Begin()};
     ASSERT_TRUE(reply.IsPending());
 
     reply.Send({});
@@ -81,7 +83,8 @@ TEST(MethodReplyTest, DroppedReplyAnswersSkeletonAlreadyDestroyed)
 {
     FakeConnection connection{};
     {
-        MethodReply reply{std::make_shared<ReplyGate>(connection)};
+        auto reply_gate = std::make_shared<ReplyGate>(connection);
+    MethodReply reply{reply_gate, reply_gate->Begin()};
     }
     ASSERT_EQ(connection.replies_.size(), 1U);
     EXPECT_EQ(ErrorOf(connection.replies_[0]), MethodErrc::kSkeletonAlreadyDestroyed);
@@ -90,7 +93,8 @@ TEST(MethodReplyTest, DroppedReplyAnswersSkeletonAlreadyDestroyed)
 TEST(MethodReplyTest, MovedFromReplyDoesNotReply)
 {
     FakeConnection connection{};
-    MethodReply first{std::make_shared<ReplyGate>(connection)};
+    auto first_gate = std::make_shared<ReplyGate>(connection);
+    MethodReply first{first_gate, first_gate->Begin()};
     MethodReply second{std::move(first)};
     EXPECT_FALSE(first.IsPending());
     second.Send({});
@@ -101,7 +105,7 @@ TEST(MethodReplyTest, ReplyAfterCloseIsDropped)
 {
     FakeConnection connection{};
     auto gate = std::make_shared<ReplyGate>(connection);
-    MethodReply reply{gate};
+    MethodReply reply{gate, gate->Begin()};
     gate->Close();
     reply.Send({});
     EXPECT_TRUE(connection.replies_.empty());
@@ -111,14 +115,66 @@ TEST(MethodReplyTest, ReplyAfterCloseIsDropped)
 TEST(MethodReplyTest, LocalGateHandsResultToWaitingThread)
 {
     auto gate = std::make_shared<ReplyGate>();
-    MethodReply reply{gate};
+    MethodReply reply{gate, gate->Begin()};
     std::thread sender{[reply = std::move(reply)]() mutable {
         reply.Send(MakeUnexpected(MethodErrc::kNotOffered));
     }};
-    const auto result = gate->WaitLocal();
+    const auto result = gate->WaitLocal(std::chrono::milliseconds{0});
     sender.join();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(static_cast<MethodErrc>(*result.error()), MethodErrc::kNotOffered);
+}
+
+TEST(MethodReplyTest, ReplyForAnOlderCallIsRefused)
+{
+    FakeConnection connection{};
+    auto gate = std::make_shared<ReplyGate>(connection);
+    MethodReply first{gate, gate->Begin()};
+    gate->ExpireIfDue(ReplyGate::Clock::now());  // no deadline armed: nothing happens
+    EXPECT_TRUE(connection.replies_.empty());
+    first.ArmDeadline(std::chrono::milliseconds{1});
+    gate->ExpireIfDue(ReplyGate::Clock::now() + std::chrono::milliseconds{5});
+    ASSERT_EQ(connection.replies_.size(), 1U);
+    EXPECT_EQ(ErrorOf(connection.replies_[0]), MethodErrc::kReplyTimeout);
+
+    MethodReply second{gate, gate->Begin()};
+    bool written{false};
+    score::cpp::callback<void()> write{[&written]() {
+        written = true;
+    }};
+    EXPECT_FALSE(first.Complete(write));  // late: answered by the timeout and replaced by the second call
+    EXPECT_FALSE(written);
+    EXPECT_TRUE(second.IsOpen());
+    EXPECT_TRUE(second.Complete(write));
+    EXPECT_TRUE(written);
+    ASSERT_EQ(connection.replies_.size(), 2U);
+    EXPECT_EQ(connection.replies_[1], (std::vector<std::uint8_t>(sizeof(score::result::ErrorCode), 0U)));
+}
+
+TEST(MethodReplyTest, CompleteAfterCloseDoesNotWrite)
+{
+    FakeConnection connection{};
+    auto gate = std::make_shared<ReplyGate>(connection);
+    MethodReply reply{gate, gate->Begin()};
+    gate->Close();
+    EXPECT_FALSE(reply.IsOpen());
+    bool written{false};
+    score::cpp::callback<void()> write{[&written]() {
+        written = true;
+    }};
+    EXPECT_FALSE(reply.Complete(write));
+    EXPECT_FALSE(written);
+    EXPECT_TRUE(connection.replies_.empty());
+}
+
+TEST(MethodReplyTest, LocalWaitTimesOut)
+{
+    auto gate = std::make_shared<ReplyGate>();
+    MethodReply reply{gate, gate->Begin()};
+    const auto result = gate->WaitLocal(std::chrono::milliseconds{20});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(static_cast<MethodErrc>(*result.error()), MethodErrc::kReplyTimeout);
+    EXPECT_FALSE(reply.Send({}));
 }
 
 }  // namespace

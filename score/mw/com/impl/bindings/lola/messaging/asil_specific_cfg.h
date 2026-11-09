@@ -42,6 +42,9 @@ struct AsilSpecificCfg
     /// Method calls that may wait for a dispatcher thread; a call beyond that is answered with kCallQueueFull.
     // coverity[autosar_cpp14_m11_0_1_violation]
     std::size_t method_call_queue_size_{16U};
+    /// Milliseconds a deferred method call may stay unanswered before the caller gets kReplyTimeout; 0: no limit.
+    // coverity[autosar_cpp14_m11_0_1_violation]
+    std::uint32_t method_reply_timeout_ms_{0U};
 };
 }  // namespace score::mw::com::impl::lola
 

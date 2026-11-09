@@ -112,6 +112,16 @@ bool DeserializeFromPayload(const score::cpp::span<const std::uint8_t> payload, 
 /// SubscribeServiceMethod.
 /// \return The outer result returns an error if SendWaitReply itself returned an error. The inner Result<void> contains
 /// the result encoded in the message itself.
+/// \brief Method errors the caller can act on (retry later, give up waiting), passed through instead of
+/// kBindingFailure.
+bool IsCallerActionableMethodError(const score::result::Error& error) noexcept
+{
+    const auto code = *error;
+    return (code == static_cast<result::ErrorCode>(MethodErrc::kCallQueueFull)) ||
+           (code == static_cast<result::ErrorCode>(MethodErrc::kNoCallThreadLeft)) ||
+           (code == static_cast<result::ErrorCode>(MethodErrc::kReplyTimeout));
+}
+
 score::Result<MethodUnserializedReply> DeserializeFromMethodReplyPayload(
     const score::cpp::span<const std::uint8_t> payload) noexcept
 {
@@ -190,7 +200,8 @@ bool IsMethodErrorRecoverable(const score::result::Error error)
         (error_code == static_cast<result::ErrorCode>(MethodErrc::kUnknownProxy)) ||
         (error_code == static_cast<result::ErrorCode>(MethodErrc::kNotSubscribed)) ||
         (error_code == static_cast<result::ErrorCode>(MethodErrc::kNotOffered)) ||
-        (error_code == static_cast<result::ErrorCode>(MethodErrc::kCallQueueFull)))
+        (error_code == static_cast<result::ErrorCode>(MethodErrc::kCallQueueFull)) ||
+        (error_code == static_cast<result::ErrorCode>(MethodErrc::kReplyTimeout)))
     {
         return true;
     }
@@ -239,6 +250,7 @@ MessagePassingServiceInstance::MessagePassingServiceInstance(
                                                                            config.method_call_max_threads_,
                                                                            config.method_call_queue_size_)
                                   : nullptr},
+      reply_timeout_{config.method_reply_timeout_ms_},
       executor_{local_event_executor},
       message_callback_scope_{},
       self_pid_{os::Unistd::instance().getpid()},
@@ -308,6 +320,12 @@ MessagePassingServiceInstance::MessagePassingServiceInstance(
         score::mw::log::LogFatal("lola") << "MessagePassingService: Failed to start listening on " << service_identifier
                                          << " with following error: " << result.error();
         std::terminate();
+    }
+    if (reply_timeout_.count() > 0)
+    {
+        reply_watchdog_ = std::thread{[this]() noexcept {
+            RunReplyWatchdog();
+        }};
     }
 }
 
@@ -693,8 +711,14 @@ MessagePassingServiceInstance::ReplyOrDeferred MessagePassingServiceInstance::Ha
         }
         return score::Result<void>{};
     }
-    DispatchMethodCall(
-        std::move(handler).value(), unserialized_payload.queue_position, MethodReply{GetReplyGate(connection)});
+    auto gate = GetReplyGate(connection);
+    MethodReply reply{gate, gate->Begin()};
+    if (is_async)
+    {
+        // Sync handlers write the return value while they run, so only deferred calls can be answered early.
+        reply.ArmDeadline(reply_timeout_);
+    }
+    DispatchMethodCall(std::move(handler).value(), unserialized_payload.queue_position, std::move(reply));
     return std::nullopt;
 }
 
@@ -757,6 +781,11 @@ void MessagePassingServiceInstance::RunMethodCall(AnyMethodCallHandler& handler,
                                                   const std::size_t queue_position,
                                                   MethodReply reply)
 {
+    if (!reply.IsOpen())
+    {
+        // Answered by a timeout while queued, or the caller is gone: its arguments may already be reused.
+        return;
+    }
     if (auto* async_handler = std::get_if<IMessagePassingService::AsyncMethodCallHandler>(&handler))
     {
         auto invocation_result = std::invoke(*async_handler, queue_position, std::move(reply));
@@ -904,9 +933,10 @@ score::Result<void> MessagePassingServiceInstance::CallServiceMethodLocally(
         return {};
     }
     auto gate = std::make_shared<ReplyGate>();
-    RunMethodCall(handler.value(), queue_position, MethodReply{gate});
+    const auto seq = gate->Begin();
+    RunMethodCall(handler.value(), queue_position, MethodReply{gate, seq});
     const BlockingCallScope blocking{};
-    return gate->WaitLocal();
+    return gate->WaitLocal(reply_timeout_);
 }
 
 Result<void> MessagePassingServiceInstance::CallSubscribeServiceMethodRemotely(
@@ -1425,8 +1455,38 @@ MessagePassingServiceInstance::~MessagePassingServiceInstance() noexcept
     {
         method_call_dispatcher_->Stop();
     }
+    if (reply_watchdog_.joinable())
+    {
+        {
+            std::lock_guard<std::mutex> lock{reply_watchdog_mutex_};
+            reply_watchdog_stop_ = true;
+        }
+        reply_watchdog_condition_.notify_all();
+        reply_watchdog_.join();
+    }
     // The server's disconnect callback uses reply_gates_, which is destroyed before server_.
     server_.reset();
+}
+
+void MessagePassingServiceInstance::RunReplyWatchdog() noexcept
+{
+    const auto period = std::clamp(reply_timeout_ / 4, std::chrono::milliseconds{10}, std::chrono::milliseconds{100});
+    std::unique_lock<std::mutex> lock{reply_watchdog_mutex_};
+    while (!reply_watchdog_condition_.wait_for(lock, period, [this]() {
+        return reply_watchdog_stop_;
+    }))
+    {
+        lock.unlock();
+        {
+            const auto now = ReplyGate::Clock::now();
+            std::lock_guard<std::mutex> gates_lock{reply_gates_mutex_};
+            for (auto& entry : reply_gates_)
+            {
+                entry.second->ExpireIfDue(now);
+            }
+        }
+        lock.lock();
+    }
 }
 
 Result<void> MessagePassingServiceInstance::RegisterAsyncMethodCallHandler(
@@ -1773,7 +1833,8 @@ Result<void> MessagePassingServiceInstance::CallMethod(
         const auto result = CallServiceMethodLocally(proxy_method_instance_identifier, queue_position, self_uid_);
         if (!(result.has_value()))
         {
-            return MakeUnexpected(ComErrc::kBindingFailure);
+            return IsCallerActionableMethodError(result.error()) ? MakeUnexpected<void>(result.error())
+                                                                  : MakeUnexpected(ComErrc::kBindingFailure);
         }
         return {};
     }
@@ -1782,7 +1843,8 @@ Result<void> MessagePassingServiceInstance::CallMethod(
         const auto result = CallServiceMethodRemotely(proxy_method_instance_identifier, queue_position, target_node_id);
         if (!(result.has_value()))
         {
-            return MakeUnexpected(ComErrc::kBindingFailure);
+            return IsCallerActionableMethodError(result.error()) ? MakeUnexpected<void>(result.error())
+                                                                  : MakeUnexpected(ComErrc::kBindingFailure);
         }
         return {};
     }

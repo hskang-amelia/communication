@@ -39,6 +39,7 @@ enum class MethodErrc : score::result::ErrorCode
     kUnknownProxy,
     kCallQueueFull,
     kNoCallThreadLeft,
+    kReplyTimeout,
     // Note. kNumEnumElements must ALWAYS be the last enum entry
     kNumEnumElements
 };
@@ -89,6 +90,9 @@ class MethodErrorDomain final : public score::result::ErrorDomain
                 // coverity[autosar_cpp14_m6_4_5_violation]
             case static_cast<score::result::ErrorCode>(MethodErrc::kNoCallThreadLeft):
                 return "All method call threads of this process are waiting for replies.";
+                // coverity[autosar_cpp14_m6_4_5_violation]
+            case static_cast<score::result::ErrorCode>(MethodErrc::kReplyTimeout):
+                return "Method call was not answered in time.";
                 // coverity[autosar_cpp14_m6_4_5_violation]
             case static_cast<score::result::ErrorCode>(MethodErrc::kInvalid):
             case static_cast<score::result::ErrorCode>(MethodErrc::kNumEnumElements):

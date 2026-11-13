@@ -97,6 +97,8 @@ files in its domain:
    [example](transport_layer/sample/configuration/example/mw_com_gateway_sample_transport_config.json). For the
    QEMU transport, the same file also carries the optional `ivshmem.preferred-bar-num` setting (default BAR2)
    used when mapping the shared-memory BAR.
+   The optional network (copying) transports `zenoh_pico` and `cyclone_dds` read their own config file instead, see
+   [transport_layer/network/README.md](transport_layer/network/README.md).
 3. `mw_com_config.json` — standard `mw::com` deployment config (provided as for all `mw::com` applications).
    Required by the `mw::com` runtime to resolve the `InstanceSpecifier`s referenced in
    `mw_com_gateway_config.json` into concrete deployment info (binding, number of slots, ASIL level, allowed

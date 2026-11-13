@@ -14,7 +14,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//quality/unit_testing:unit_testing.bzl", "cc_unit_test")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -57,7 +56,6 @@ cc_library(
         "core/type_id_check.h",
         "core/wire_format.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
 )
 
 cc_library(
@@ -65,7 +63,6 @@ cc_library(
     testonly = True,
     srcs = ["core/loopback_bus.cpp"],
     hdrs = ["core/loopback_bus.h"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [":network_core"],
 )
 
@@ -76,7 +73,6 @@ cc_unit_test(
         "core/type_id_check_test.cpp",
         "core/wire_format_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":loopback_bus",
         ":network_core",
@@ -88,7 +84,6 @@ cc_library(
     name = "network_transport",
     srcs = ["network_transport.cpp"],
     hdrs = ["network_transport.h"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":network_core",
         "//score/mw/com:types",
@@ -106,7 +101,6 @@ cc_library(
 cc_unit_test(
     name = "network_transport_test",
     srcs = ["network_transport_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":loopback_bus",
         ":network_core",

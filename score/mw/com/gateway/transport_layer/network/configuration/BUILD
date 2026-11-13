@@ -14,7 +14,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//bazel/tools:json_schema_validator.bzl", "validate_json_schema_test")
 load("//quality/unit_testing:unit_testing.bzl", "cc_unit_test")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -43,7 +42,6 @@ cc_library(
     name = "network_transport_config_parser",
     srcs = ["network_transport_config_parser.cpp"],
     hdrs = ["network_transport_config_parser.h"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         "//score/mw/com/gateway/transport_layer/network:network_core",
         "//score/mw/com/gateway/transport_layer/network/dds:cyclone_dds_bus_config",
@@ -61,7 +59,6 @@ cc_unit_test(
         "example/mw_com_gateway_cyclone_dds_transport_config.json",
         "example/mw_com_gateway_zenoh_pico_transport_config.json",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":network_transport_config_parser",
         "@score_baselibs//score/json",

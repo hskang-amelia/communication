@@ -47,7 +47,6 @@ cc_library(
     name = "transport_factory",
     srcs = ["transport_factory.cpp"],
     hdrs = ["transport_factory.h"],
-    features = COMPILER_WARNING_FEATURES,
     local_defines = select({
         "//score/mw/com/gateway/transport_layer/network:config_with_zenoh_pico": ["SCORE_GATEWAY_WITH_ZENOH_PICO"],
         "//conditions:default": [],

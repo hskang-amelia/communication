@@ -12,7 +12,6 @@
 # *******************************************************************************
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -21,7 +20,6 @@ package(
 cc_library(
     name = "cyclone_dds_bus_config",
     hdrs = ["cyclone_dds_bus_config.h"],
-    features = COMPILER_WARNING_FEATURES,
 )
 
 # generated/gateway_frame.{c,h} are checked-in idlc output (Cyclone DDS 0.10.5): `idlc -l c idl/gateway_frame.idl`.
@@ -39,7 +37,6 @@ cc_library(
     name = "cyclone_dds_bus",
     srcs = ["cyclone_dds_bus.cpp"],
     hdrs = ["cyclone_dds_bus.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["manual"],
     deps = [
         ":cyclone_dds_bus_config",

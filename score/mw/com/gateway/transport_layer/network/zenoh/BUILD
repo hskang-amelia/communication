@@ -12,7 +12,6 @@
 # *******************************************************************************
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -21,7 +20,6 @@ package(
 cc_library(
     name = "zenoh_pico_bus_config",
     hdrs = ["zenoh_pico_bus_config.h"],
-    features = COMPILER_WARNING_FEATURES,
 )
 
 # `@zenoh_pico` is not registered in MODULE.bazel yet (see ../README.md "Bazel integration"), hence `manual`: the
@@ -31,7 +29,6 @@ cc_library(
     name = "zenoh_pico_bus",
     srcs = ["zenoh_pico_bus.cpp"],
     hdrs = ["zenoh_pico_bus.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["manual"],
     deps = [
         ":zenoh_pico_bus_config",

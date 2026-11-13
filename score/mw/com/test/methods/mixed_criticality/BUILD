@@ -11,7 +11,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************
 
-load("@score_baselibs//score/language/safecpp:toolchain_features.bzl", "COMPILER_WARNING_FEATURES")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/tools:json_schema_validator.bzl", "validate_json_schema_test")
 load("//score/mw/com/test:pkg_application.bzl", "pkg_application")
 
@@ -40,7 +41,6 @@ cc_library(
     name = "consumer",
     srcs = ["consumer.cpp"],
     hdrs = ["consumer.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         "//score/mw/com",
         "//score/mw/com/test/common_test_resources:process_synchronizer",
@@ -56,7 +56,6 @@ cc_library(
     name = "provider",
     srcs = ["provider.cpp"],
     hdrs = ["provider.h"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         "//score/mw/com",
         "//score/mw/com/test/common_test_resources:process_synchronizer",
@@ -68,7 +67,7 @@ cc_library(
 cc_binary(
     name = "provider_main",
     srcs = ["provider_main.cpp"],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         "aborts_upon_exception",
     ],
     deps = [
@@ -82,7 +81,7 @@ cc_binary(
 cc_binary(
     name = "consumer_main",
     srcs = ["consumer_main.cpp"],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         "aborts_upon_exception",
     ],
     deps = [

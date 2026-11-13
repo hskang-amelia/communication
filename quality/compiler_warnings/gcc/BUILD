@@ -16,22 +16,11 @@
 load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
 load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
 
-cc_args(
-    name = "default_link_args",
-    actions = [
-        "@rules_cc//cc/toolchains/actions:link_actions",
-    ],
-    args = [
-        "-fuse-ld=gold",
-    ],
-)
-
 cc_feature(
     name = "default_flags",
     args = [
         "//quality/compiler_warnings:default_compile_args",
         "//quality/compiler_warnings:default_link_args",
-        ":default_link_args",
     ],
     feature_name = "score_communication_gcc_default_flags",
     visibility = ["//visibility:public"],
@@ -39,43 +28,6 @@ cc_feature(
 
 cc_args(
     name = "minimal_warnings_args_for_all_compile_actions",
-    actions = [
-        "@rules_cc//cc/toolchains/actions:compile_actions",
-    ],
-    args = [
-        "-Wno-builtin-macro-redefined",
-        # Reduce known GCC false positives.
-        "-Wno-maybe-uninitialized",
-        # GCC-only diagnostics (Clang has no equivalent flag).
-        "-Wno-format-y2k",
-        "-Wno-free-nonheap-object",
-    ],
-)
-
-cc_args(
-    name = "minimal_warnings_args_for_cpp_compile_actions",
-    actions = [
-        "@rules_cc//cc/toolchains/actions:cpp_compile_actions",
-    ],
-    args = [
-        "-Wno-literal-suffix",
-        "-Wno-noexcept-type",
-    ],
-)
-
-cc_feature(
-    name = "minimal_warnings",
-    args = [
-        ":minimal_warnings_args_for_all_compile_actions",
-        ":minimal_warnings_args_for_cpp_compile_actions",
-    ],
-    feature_name = "score_communication_minimal_warnings",
-    implies = ["//quality/compiler_warnings:minimal_warnings"],
-    visibility = ["//visibility:public"],
-)
-
-cc_args(
-    name = "strict_warnings_args_for_all_compile_actions",
     actions = [
         "@rules_cc//cc/toolchains/actions:compile_actions",
     ],
@@ -92,7 +44,7 @@ cc_args(
 )
 
 cc_args(
-    name = "strict_warnings_args_for_cpp_compile_actions",
+    name = "minimal_warnings_args_for_cpp_compile_actions",
     actions = [
         "@rules_cc//cc/toolchains/actions:cpp_compile_actions",
     ],
@@ -105,7 +57,7 @@ cc_args(
 )
 
 cc_args(
-    name = "strict_warnings_args_for_c_compile_actions",
+    name = "minimal_warnings_args_for_c_compile_actions",
     actions = [
         "@rules_cc//cc/toolchains/actions:c_compile_actions",
     ],
@@ -116,101 +68,40 @@ cc_args(
 )
 
 cc_feature(
-    name = "strict_warnings",
+    name = "minimal_warnings",
     args = [
-        ":strict_warnings_args_for_all_compile_actions",
-        ":strict_warnings_args_for_cpp_compile_actions",
-        ":strict_warnings_args_for_c_compile_actions",
+        "//quality/compiler_warnings:minimal_warnings_args",
+        ":minimal_warnings_args_for_all_compile_actions",
+        ":minimal_warnings_args_for_cpp_compile_actions",
+        ":minimal_warnings_args_for_c_compile_actions",
     ],
-    feature_name = "score_communication_strict_warnings",
-    implies = [
-        "//quality/compiler_warnings:strict_warnings",
-        "minimal_warnings",
-    ],
+    feature_name = "score_communication_minimal_warnings",
     visibility = ["//visibility:public"],
 )
 
 cc_args(
-    name = "strict_warnings_no_error_args",
+    name = "misra_warnings_args",
     actions = [
-        "@rules_cc//cc/toolchains/actions:compile_actions",
+        "@rules_cc//cc/toolchains/actions:cpp_compile_actions",
     ],
+    # This contains the list of warnings that we decided to enable for C++ to help fulfilling
+    # MISRA C++:2023. This list contains only the warnings that are enabled in gcc only.
+    # The warnings that are common can be found in the BUILD file one level up.
     args = [
-        # Targeted demotions only; -Werror is prepended in the feature below so
-        # these reliably take effect.
-        "-Wno-error=address-of-packed-member",
-        "-Wno-error=alloc-size-larger-than",
-        "-Wno-error=array-bounds",
-        "-Wno-error=attributes",
-        "-Wno-error=conversion",
-        "-Wno-error=dangling-pointer",
-        "-Wno-error=invalid-memory-model",
-        "-Wno-error=maybe-uninitialized",
-        "-Wno-error=misleading-indentation",
-        "-Wno-error=missing-attributes",
-        "-Wno-error=nonnull",
-        "-Wno-error=pessimizing-move",
-        "-Wno-error=range-loop-construct",
-        "-Wno-error=redundant-move",
-        "-Wno-error=return-type",
-        "-Wno-error=shadow",
-        "-Wno-error=sign-compare",
-        "-Wno-error=sign-conversion",
-        "-Wno-error=stringop-overflow",
-        "-Wno-error=stringop-truncation",
-        "-Wno-error=strict-aliasing",
-        # GCC-only ThreadSanitizer instrumentation diagnostic (enabled by default);
-        # kept non-fatal so it cannot break --config=tsan builds. Clang has no -Wtsan.
-        "-Wno-error=tsan",
-        "-Wno-error=type-limits",
-        "-Wno-error=uninitialized",
-        "-Wno-error=unused-but-set-variable",
-        "-Wno-error=unused-function",
+        "-Wunused-local-typedefs",  # Helps to achieve MISRA C++:2023 Rule 0-2-3
+        "-Wreturn-local-addr",  # Helps to achieve MISRA C++:2023 Rule 6-8-2
+        "-Wfloat-conversion",  # Helps to achieve MISRA C++:2023 Rule 7-0-6
+        "-Wcast-function-type",  # Helps to achieve MISRA C++:2023 Rule 8-2-4
+        "-Wterminate",  # Helps to achieve MISRA C++:2023 Rule 18-5-1
     ],
 )
 
 cc_feature(
-    name = "strict_warnings_no_error",
+    name = "misra_warnings",
     args = [
-        "//quality/compiler_warnings:treat_warnings_as_errors_args",
-        ":strict_warnings_no_error_args",
+        ":misra_warnings_args",
+        "//quality/compiler_warnings:minimal_warnings_args",
     ],
-    feature_name = "score_communication_strict_warnings_no_error",
-    implies = ["strict_warnings"],
-    visibility = ["//visibility:public"],
-)
-
-cc_feature(
-    name = "additional_warnings",
-    args = [
-        "//quality/compiler_warnings:additional_warnings_args",
-    ],
-    feature_name = "score_communication_additional_warnings",
-    implies = [":strict_warnings"],
-    visibility = ["//visibility:public"],
-)
-
-cc_args(
-    name = "third_party_warnings_args",
-    actions = [
-        "@rules_cc//cc/toolchains/actions:compile_actions",
-    ],
-    args = [
-        "-w",
-    ],
-)
-
-cc_feature(
-    name = "third_party_warnings",
-    args = [
-        ":third_party_warnings_args",
-    ],
-    feature_name = "score_communication_third_party_warnings",
-    mutually_exclusive = [
-        ":additional_warnings",
-        "//quality/compiler_warnings:treat_warnings_as_errors",
-        ":minimal_warnings",
-        ":strict_warnings",
-    ],
+    feature_name = "score_communication_misra_warnings",
     visibility = ["//visibility:public"],
 )

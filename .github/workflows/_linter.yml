@@ -49,7 +49,7 @@ jobs:
           - id: ruff
             bazel-config: ruff
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -61,8 +61,7 @@ jobs:
 
       - name: Install Aspect CLI
         if: inputs.fetch-only != 'true'
-        # v2026.26.9 (https://github.com/aspect-build/setup-aspect/releases/tag/v2026.26.9)
-        uses: aspect-build/setup-aspect@2306377a61c45954ab2df7c7311698b109364352
+        uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
           # Bazel/Bazelisk and disk/repository caching are already handled by
           # the prepare_bazel_environment step above; avoid duplicating them
@@ -132,9 +131,19 @@ jobs:
           bep-json: /tmp/bep.json
           output-file: ${{ matrix.id }}.sarif
 
+      - name: Add rule IDs to Ruff SARIF results
+        # rules_lint's Ruff SARIF keeps the rule code only in the message text.
+        if: ${{ !cancelled() && inputs.fetch-only != 'true' && matrix.id == 'ruff' && steps.sarif.outcome == 'success' }}
+        run: |
+          jq '.runs |= map(
+                .results |= map(.ruleId //= ((.message.text | capture("^(?<id>[A-Z]+[0-9]+)") | .id) // "ruff"))
+                | .tool.driver.rules = ([.results[].ruleId] | unique | map({id: .}))
+              )' ruff.sarif > ruff.sarif.tmp
+          mv ruff.sarif.tmp ruff.sarif
+
       - name: Upload SARIF reports to GitHub Code Scanning
         if: ${{ !cancelled() && inputs.fetch-only != 'true' }}
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           sarif_file: ${{ matrix.id }}.sarif
           category: ${{ matrix.id }}
@@ -146,7 +155,7 @@ jobs:
 
       - name: Upload ${{ matrix.id }} findings as artifact
         if: ${{ !cancelled() && inputs.fetch-only != 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.id }}-findings
           path: |

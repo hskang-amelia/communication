@@ -1,5 +1,5 @@
 ' *******************************************************************************
-' Copyright (c) {year} Contributors to the Eclipse Foundation
+' Copyright (c) 2026 Contributors to the Eclipse Foundation
 '
 ' See the NOTICE file(s) distributed with this work for additional
 ' information regarding copyright ownership.
@@ -15,11 +15,11 @@
 
 !include fta_metamodel.puml
 
-$TopEvent("Failure freeing resources on destruction", "Communication.MethodSignatureElementPtrFailsToFree")
+$FailureMode("Failure freeing resources on destruction", "Communication.MethodSignatureElementPtrFailsToFree")
 
 $OrGate("Gate1", "Communication.MethodSignatureElementPtrFailsToFree")
-$BasicEvent("Does not free method signature element", "Communication.DoesNotFreeMethodSignatureElement", "Gate1")
+$RootCause("Does not free method signature element", "DoesNotFreeMethodSignatureElement", "Gate1")
 $IntermediateEvent("Frees wrong method signature element", "Event2", "Gate1")
-$BasicEvent("Overwrite of element in use", "Communication.OverwriteOfElementInUse", "Event2")
+$RootCause("Overwrite of element in use", "OverwriteOfElementInUse", "Event2")
 
 @enduml

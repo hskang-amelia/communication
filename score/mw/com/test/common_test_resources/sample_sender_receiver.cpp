@@ -15,6 +15,7 @@
 
 #include "score/concurrency/notification.h"
 #include "score/memory/shared/vector.h"
+#include "score/mw/com/impl/bindings/lola/proxy_event.h"
 #include "score/mw/com/types.h"
 #include "score/os/mman.h"
 
@@ -23,6 +24,7 @@
 #include <optional>
 
 #include <unistd.h>
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -51,11 +53,13 @@ std::ostream& operator<<(std::ostream& stream, const InstanceSpecifier& instance
 template <typename T>
 void ToStringImpl(std::ostream& o, const T& t)
 {
+    // String literals are streamed through this generic helper; operator<<(ostream&, const char*) requires the decay.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay,hicpp-no-array-decay)
     o << t;
 }
 
 template <typename T, typename... Args>
-void ToStringImpl(std::ostream& o, const T& t, Args... args)
+void ToStringImpl(std::ostream& o, const T& t, const Args&... args)
 {
     ToStringImpl(o, t);
     ToStringImpl(o, args...);
@@ -71,11 +75,9 @@ std::string ToString(const Args&... args)
 
 void HashArray(const std::array<LaneIdType, 16U>& array, std::size_t& seed)
 {
-    const std::ptrdiff_t buffer_size =
-        reinterpret_cast<const std::uint8_t*>(&*array.cend()) - reinterpret_cast<const std::uint8_t*>(&*array.cbegin());
-    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(buffer_size > 0);
-    seed = score::cpp::hash_bytes_fnv1a(
-        static_cast<const void*>(array.data()), static_cast<std::size_t>(buffer_size), seed);
+    const std::size_t buffer_size = array.size() * sizeof(LaneIdType);
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(buffer_size > 0U);
+    seed = score::cpp::hash_bytes_fnv1a(static_cast<const void*>(array.data()), buffer_size, seed);
 }
 
 class MmanMock : public os::Mman
@@ -104,7 +106,7 @@ class MmanMock : public os::Mman
                                                            const os::Stat::Mode mode) const noexcept override
     {
         // shm_open calls are INTERESTING for this test - we memorize the pathname - and then forward
-        std::strcpy(last_shm_open_path_, pathname);
+        std::strcpy(last_shm_open_path_.data(), pathname);
         shm_open_callcount_++;
         return utils::StaticDestructionGuard<os::internal::MmanImpl>::GetStorage().shm_open(pathname, oflag, mode);
     };
@@ -141,18 +143,18 @@ class MmanMock : public os::Mman
 
     const char* GetLastShmOpenPath() const noexcept
     {
-        return last_shm_open_path_;
+        return last_shm_open_path_.data();
     }
 
   private:
-    mutable char last_shm_open_path_[1024];
-    mutable std::uint32_t shm_open_callcount_;
+    mutable std::array<char, 1024> last_shm_open_path_{};
+    mutable std::uint32_t shm_open_callcount_{0U};
 };
 
 class SampleReceiver
 {
   public:
-    SampleReceiver(const score::mw::com::InstanceSpecifier& instance_specifier)
+    explicit SampleReceiver(const score::mw::com::InstanceSpecifier& instance_specifier)
         : instance_specifier_{instance_specifier}, last_received_{}, received_{0U}
     {
     }
@@ -245,7 +247,7 @@ score::result::Error MakeError(const TestErrorCode code, const std::string_view 
 class TestDestructor
 {
   public:
-    TestDestructor(score::cpp::stop_source& stop_source) : stop_source_{stop_source} {}
+    explicit TestDestructor(score::cpp::stop_source& stop_source) : stop_source_{stop_source} {}
     TestDestructor(const TestDestructor&) = delete;
     TestDestructor& operator=(const TestDestructor&) = delete;
     TestDestructor(TestDestructor&&) = delete;
@@ -265,7 +267,7 @@ bool ElementFqIdMatchesConfigurationValue(
     const score::mw::com::impl::lola::ElementFqId element_fq_id_from_config) noexcept
 {
     auto* const binding = impl::ProxyEventView<SampleType>{proxy_event}.GetBinding();
-    auto* const lola_binding = dynamic_cast<impl::lola::ProxyEvent<SampleType>*>(binding);
+    auto* const lola_binding = dynamic_cast<impl::lola::ProxyEvent*>(binding);
     if (lola_binding == nullptr)
     {
         return {};
@@ -369,11 +371,11 @@ score::Result<HandleType> GetHandleFromSpecifier(const InstanceSpecifier& instan
             return MakeUnexpected<HandleType>(std::move(handles_result.error()));
         }
         handles = std::move(handles_result).value();
-        if (handles.size() == 0)
+        if (handles.empty())
         {
             std::this_thread::sleep_for(500ms);
         }
-    } while (handles.size() == 0);
+    } while (handles.empty());
 
     std::cout << ToString(instance_specifier, ": Found service, instantiating proxy\n");
     return handles.front();
@@ -405,6 +407,119 @@ Result<SampleAllocateePtr<MapApiLanesStamped>> PrepareMapLaneSample(BigDataSkele
         HashArray(lane.successor_lanes, sample->hash_value);
     }
     return sample;
+}
+
+template <typename ProxyEventType>
+bool SetReceiveHandler(ProxyEventType& map_api_lanes_stamped_event,
+                       concurrency::Notification& event_received,
+                       const InstanceSpecifier& instance_specifier)
+{
+    const auto set_receive_handler_result =
+        map_api_lanes_stamped_event.SetReceiveHandler([&event_received, &instance_specifier]() {
+            std::cout << ToString(instance_specifier, ": Callback called\n");
+            event_received.notify();
+        });
+    if (!set_receive_handler_result.has_value())
+    {
+        std::cerr << "Unable to set receive handler: " << set_receive_handler_result.error() << ", bailing!\n";
+        return false;
+    }
+
+    return true;
+}
+
+bool WaitForNextProxyCycle(const std::optional<std::chrono::milliseconds>& cycle_time,
+                           concurrency::Notification& event_received,
+                           const score::cpp::stop_token& stop_token)
+{
+    if (cycle_time.has_value())
+    {
+        std::this_thread::sleep_for(*cycle_time);
+        return true;
+    }
+
+    return event_received.waitWithAbort(stop_token);
+}
+
+void LogProxyReceiveError(const InstanceSpecifier& instance_specifier,
+                          const std::size_t cycle,
+                          const std::size_t num_samples_received,
+                          const std::size_t received,
+                          const bool receive_handler_called_without_new_samples)
+{
+    std::stringstream ss;
+    ss << instance_specifier << ": Error in cycle " << cycle << " during sample reception: ";
+    if (!receive_handler_called_without_new_samples)
+    {
+        ss << "number of received samples doesn't match to what IPC claims: " << num_samples_received << " vs "
+           << received;
+    }
+    else
+    {
+        ss << "expected at least one new sample, since event-notifier has been called, but "
+              "GetNewSamples() didn't provide one! ";
+    }
+    ss << ", terminating.\n";
+    std::cerr << ss.str();
+}
+
+template <typename SampleType, typename ProxyEventType>
+bool ReceiveSamplesForCycle(const InstanceSpecifier& instance_specifier,
+                            const std::size_t cycle,
+                            const std::optional<std::chrono::milliseconds>& cycle_time,
+                            ProxyEventType& map_api_lanes_stamped_event,
+                            SampleReceiver& receiver,
+                            const bool try_writing_to_data_segment,
+                            std::size_t& received_samples)
+{
+    constexpr const std::size_t SAMPLES_PER_CYCLE = 2U;
+
+    const auto received_before = receiver.GetReceivedSampleCount();
+    Result<std::size_t> num_samples_received = map_api_lanes_stamped_event.GetNewSamples(
+        [&receiver, try_writing_to_data_segment](SamplePtr<SampleType> sample) noexcept {
+            if (try_writing_to_data_segment)
+            {
+                // Try writing to the data segment (in which the sample data is stored). Used in a death test to
+                // ensure that this is not possible.
+                ModifySampleValue(sample);
+            }
+
+            // For the GenericProxy case, the void pointer managed by the SamplePtr<void> will be cast to
+            // MapApiLanesStamped.
+            const MapApiLanesStamped& sample_value = GetSamplePtrValue(sample.get());
+            receiver.ReceiveSample(sample_value);
+        },
+        SAMPLES_PER_CYCLE);
+    const auto received = receiver.GetReceivedSampleCount() - received_before;
+
+    if (!num_samples_received.has_value())
+    {
+        std::cerr << ToString(instance_specifier,
+                              ": Error in cycle ",
+                              cycle,
+                              " during sample reception: ",
+                              std::move(num_samples_received).error(),
+                              ", terminating.\n");
+        map_api_lanes_stamped_event.Unsubscribe();
+        return false;
+    }
+
+    const bool mismatch_api_returned_receive_count_vs_sample_callbacks = *num_samples_received != received;
+    const bool receive_handler_called_without_new_samples = *num_samples_received == 0 && !cycle_time.has_value();
+    if (mismatch_api_returned_receive_count_vs_sample_callbacks || receive_handler_called_without_new_samples)
+    {
+        LogProxyReceiveError(
+            instance_specifier, cycle, *num_samples_received, received, receive_handler_called_without_new_samples);
+        map_api_lanes_stamped_event.Unsubscribe();
+        return false;
+    }
+
+    received_samples = *num_samples_received;
+    if (received_samples >= 1U)
+    {
+        std::cout << ToString(instance_specifier, ": Proxy received valid data\n");
+    }
+    return true;
 }
 
 }  // namespace
@@ -447,18 +562,9 @@ int EventSenderReceiver::RunAsProxy(const score::mw::com::InstanceSpecifier& ins
     auto& map_api_lanes_stamped_event = map_api_lanes_stamped_event_optional.value().get();
 
     concurrency::Notification event_received;
-    if (!cycle_time.has_value())
+    if (!cycle_time.has_value() && !SetReceiveHandler(map_api_lanes_stamped_event, event_received, instance_specifier))
     {
-        const auto set_receive_handler_result =
-            map_api_lanes_stamped_event.SetReceiveHandler([&event_received, &instance_specifier]() {
-                std::cout << ToString(instance_specifier, ": Callback called\n");
-                event_received.notify();
-            });
-        if (!set_receive_handler_result.has_value())
-        {
-            std::cerr << "Unable to set receive handler: " << set_receive_handler_result.error() << ", bailing!\n";
-            return EXIT_FAILURE;
-        }
+        return EXIT_FAILURE;
     }
 
     std::cout << ToString(instance_specifier, ": Subscribing to service\n");
@@ -473,75 +579,25 @@ int EventSenderReceiver::RunAsProxy(const score::mw::com::InstanceSpecifier& ins
     for (std::size_t cycle = 0U; (cycle < num_cycles) && !stop_token.stop_requested();)
     {
         const auto cycle_start_time = std::chrono::steady_clock::now();
-        if (cycle_time.has_value())
+        if (!WaitForNextProxyCycle(cycle_time, event_received, stop_token))
         {
-            std::this_thread::sleep_for(*cycle_time);
-        }
-        else
-        {
-            if (!event_received.waitWithAbort(stop_token))
-            {
-                // Abort happened
-                break;
-            }
+            // Abort happened
+            break;
         }
 
-        const auto received_before = receiver.GetReceivedSampleCount();
-        Result<std::size_t> num_samples_received = map_api_lanes_stamped_event.GetNewSamples(
-            [&receiver, try_writing_to_data_segment](SamplePtr<SampleType> sample) noexcept {
-                if (try_writing_to_data_segment)
-                {
-                    // Try writing to the data segment (in which the sample data is stored). Used in a death test to
-                    // ensure that this is not possible.
-                    ModifySampleValue(sample);
-                }
-
-                // For the GenericProxy case, the void pointer managed by the SamplePtr<void> will be cast to
-                // MapApiLanesStamped.
-                const MapApiLanesStamped& sample_value = GetSamplePtrValue(sample.get());
-                receiver.ReceiveSample(sample_value);
-            },
-            SAMPLES_PER_CYCLE);
-        const auto received = receiver.GetReceivedSampleCount() - received_before;
-
-        const bool get_new_samples_api_error = !num_samples_received.has_value();
-        const bool mismatch_api_returned_receive_count_vs_sample_callbacks = *num_samples_received != received;
-        const bool receive_handler_called_without_new_samples = *num_samples_received == 0 && !cycle_time.has_value();
-
-        if (get_new_samples_api_error || mismatch_api_returned_receive_count_vs_sample_callbacks ||
-            receive_handler_called_without_new_samples)
+        std::size_t received_samples{0U};
+        if (!ReceiveSamplesForCycle<SampleType>(instance_specifier,
+                                                cycle,
+                                                cycle_time,
+                                                map_api_lanes_stamped_event,
+                                                receiver,
+                                                try_writing_to_data_segment,
+                                                received_samples))
         {
-            std::stringstream ss;
-            ss << instance_specifier << ": Error in cycle " << cycle << " during sample reception: ";
-            if (!get_new_samples_api_error)
-            {
-                if (mismatch_api_returned_receive_count_vs_sample_callbacks)
-                {
-                    ss << "number of received samples doesn't match to what IPC claims: " << *num_samples_received
-                       << " vs " << received;
-                }
-                else
-                {
-                    ss << "expected at least one new sample, since event-notifier has been called, but "
-                          "GetNewSamples() didn't provide one! ";
-                }
-            }
-            else
-            {
-                ss << std::move(num_samples_received).error();
-            }
-            ss << ", terminating.\n";
-            std::cerr << ss.str();
-
-            map_api_lanes_stamped_event.Unsubscribe();
             return EXIT_FAILURE;
         }
 
-        if (*num_samples_received >= 1U)
-        {
-            std::cout << ToString(instance_specifier, ": Proxy received valid data\n");
-            cycle += *num_samples_received;
-        }
+        cycle += received_samples;
 
         const auto cycle_duration = std::chrono::steady_clock::now() - cycle_start_time;
 
@@ -827,9 +883,9 @@ int EventSenderReceiver::RunAsProxyCheckValuesCreatedFromConfig(
                   << ". Failed with error: " << handle_result.error() << ", bailing!\n";
         return EXIT_FAILURE;
     }
-    auto handle = handle_result.value();
+    const auto& handle = handle_result.value();
 
-    auto proxy_result = BigDataProxy::Create(std::move(handle));
+    auto proxy_result = BigDataProxy::Create(handle);
     if (!proxy_result.has_value())
     {
         std::cerr << "Unable to construct BigDataProxy: " << proxy_result.error() << ", bailing!\n";
@@ -896,9 +952,9 @@ int EventSenderReceiver::RunAsProxyReceiveHandlerOnly(const score::mw::com::Inst
                   << ". Failed with error: " << handle_result.error() << ", bailing!\n";
         return EXIT_FAILURE;
     }
-    auto handle = handle_result.value();
+    const auto& handle = handle_result.value();
 
-    auto proxy_result = BigDataProxy::Create(std::move(handle));
+    auto proxy_result = BigDataProxy::Create(handle);
     if (!proxy_result.has_value())
     {
         std::cerr << "Unable to construct BigDataProxy: " << proxy_result.error() << ", bailing!\n";
@@ -976,9 +1032,9 @@ int EventSenderReceiver::RunAsProxyCheckEventSlots(const score::mw::com::Instanc
                   << ". Failed with error: " << handle_result.error() << ", bailing!\n";
         return EXIT_FAILURE;
     }
-    auto handle = handle_result.value();
+    const auto& handle = handle_result.value();
 
-    auto proxy_result = BigDataProxy::Create(std::move(handle));
+    auto proxy_result = BigDataProxy::Create(handle);
     if (!proxy_result.has_value())
     {
         std::cerr << "Unable to construct BigDataProxy: " << proxy_result.error() << ", bailing!\n";
@@ -1059,9 +1115,9 @@ int EventSenderReceiver::RunAsProxyCheckSubscribeHandler(const score::mw::com::I
                   << ". Failed with error: " << handle_result.error() << ", bailing!\n";
         return EXIT_FAILURE;
     }
-    auto handle = handle_result.value();
+    const auto& handle = handle_result.value();
 
-    auto proxy_result = BigDataProxy::Create(std::move(handle));
+    auto proxy_result = BigDataProxy::Create(handle);
     if (!proxy_result.has_value())
     {
         std::cerr << "Unable to construct BigDataProxy: " << proxy_result.error() << ", bailing!\n";

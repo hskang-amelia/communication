@@ -11,8 +11,6 @@
  * SPDX-License-Identifier: Apache-2.0
  *******************************************************************************/
 
-#include "score/mw/com/test/partial_restart/provider_restart/provider_restart_application.h"
-
 #include "score/mw/com/test/common_test_resources/general_resources.h"
 #include "score/mw/com/test/common_test_resources/stop_token_sig_term_handler.h"
 #include "score/mw/com/test/partial_restart/provider_restart/controller.h"
@@ -84,7 +82,7 @@ std::optional<TestParameters> ParseTestParameters(int argc, const char** argv) n
 
     po::notify(args);
 
-    if (service_instance_manifest != "")
+    if (!service_instance_manifest.empty())
     {
         test_parameters.service_instance_manifest = service_instance_manifest;
     }

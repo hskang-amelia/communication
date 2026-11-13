@@ -141,13 +141,13 @@ class SkeletonFieldTestFixture : public ::testing::Test
             }));
 
         ON_CALL(skeleton_method_binding_factory_mock_guard_.factory_mock_,
-                Create(kInstanceIdWithLolaBinding, _, _, MethodType::kGet))
+                Create(kInstanceIdWithLolaBinding, _, _, MethodType::kGet, _, _))
             .WillByDefault(InvokeWithoutArgs([this]() {
                 return std::make_unique<mock_binding::SkeletonMethodFacade>(skeleton_field_get_binding_mock_);
             }));
 
         ON_CALL(skeleton_method_binding_factory_mock_guard_.factory_mock_,
-                Create(kInstanceIdWithLolaBinding, _, _, MethodType::kSet))
+                Create(kInstanceIdWithLolaBinding, _, _, MethodType::kSet, _, _))
             .WillByDefault(InvokeWithoutArgs([this]() {
                 return std::make_unique<mock_binding::SkeletonMethodFacade>(skeleton_field_set_binding_mock_);
             }));
@@ -851,7 +851,7 @@ TEST(SkeletonFieldInitialValueTest, MoveAssigningFieldBeforePrepareOfferWillKeep
     SkeletonMethodBindingFactoryMockGuard skeleton_method_binding_factory_mock_guard{};
 
     mock_binding::SkeletonMethod skeleton_method_mock{};
-    ON_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_, Create(_, _, _, _))
+    ON_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_, Create(_, _, _, _, _, _))
         .WillByDefault(InvokeWithoutArgs([&skeleton_method_mock]() {
             return std::make_unique<mock_binding::SkeletonMethodFacade>(skeleton_method_mock);
         }));
@@ -1444,7 +1444,7 @@ TEST_F(SkeletonFieldGetHandlerTest, OfferingGetterEnabledFieldRegistersGetHandle
     GivenAFieldWithSetterAndGetterEnabled();
 
     // and given that a set handler was registered (needed in order to offer the field)
-    const auto result = unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {});
+    ASSERT_TRUE(unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {}).has_value());
 
     // When offering the field
     WhichIsOffered();
@@ -1457,7 +1457,7 @@ TEST_F(SkeletonFieldGetHandlerTest, CallingMethodHandlerPutsLatestSampleInMethod
     WhichCapturesAGetHandler().GivenAFieldWithSetterAndGetterEnabled();
 
     // and given that a set handler was registered (needed in order to offer the field)
-    const auto result = unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {});
+    ASSERT_TRUE(unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {}).has_value());
 
     WhichIsOffered();
 
@@ -1465,9 +1465,9 @@ TEST_F(SkeletonFieldGetHandlerTest, CallingMethodHandlerPutsLatestSampleInMethod
     const QualityType kDummyQuality{QualityType::kASIL_QM};
     TestSampleType* dummyLatestValue{const_cast<TestSampleType*>(&kDummyLatestValue)};
     EXPECT_CALL(skeleton_field_binding_mock_, GetLatestSample(kDummyQuality))
-        .WillOnce(Return(ByMove(
-            SamplePtr<void>{mock_binding::SamplePtr<void>{static_cast<void*>(dummyLatestValue), [](void*) noexcept {}},
-                            SampleReferenceGuard{}})));
+        .WillOnce(Return(
+            ByMove(SamplePtr<void>{mock_binding::SamplePtr{static_cast<void*>(dummyLatestValue), [](void*) noexcept {}},
+                                   SampleReferenceGuard{}})));
 
     // When calling the get handler that was captured by the method binding
     auto out_span = CreateFieldGetterReturnSpan(score::Result<TestSampleType>{});
@@ -1486,7 +1486,7 @@ TEST_F(SkeletonFieldGetHandlerTest, CallingMethodHandlerPutsErrorInMethodReturnB
     WhichCapturesAGetHandler().GivenAFieldWithSetterAndGetterEnabled();
 
     // and given that a set handler was registered (needed in order to offer the field)
-    const auto result = unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {});
+    ASSERT_TRUE(unit_->my_setter_field_.RegisterSetHandler([](TestSampleType& /*value*/) noexcept {}).has_value());
 
     WhichIsOffered();
 

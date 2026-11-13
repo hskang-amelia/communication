@@ -1,15 +1,15 @@
-/********************************************************************************
- * Copyright (c) 2025 Contributors to the Eclipse Foundation
+/*******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 /// Type-state marker for uninitialized field value state (compile-time tracking).
 ///
@@ -552,7 +552,7 @@ macro_rules! _interface_collect_members {
 macro_rules! interface_common {
     // Default: auto ID = module path + type name
     ($id:ident) => {
-        score_com::paste::paste! {
+        score_com::pastey::paste! {
             pub struct [<$id Interface>] {}
             impl score_com::Interface for [<$id Interface>] {
                 const INTERFACE_ID: &'static str =
@@ -564,7 +564,7 @@ macro_rules! interface_common {
     };
     // Explicit ID override
     ($id:ident, $uid:expr) => {
-        score_com::paste::paste! {
+        score_com::pastey::paste! {
             pub struct [<$id Interface>] {}
             impl score_com::Interface for [<$id Interface>] {
                 const INTERFACE_ID: &'static str = $uid;
@@ -1400,7 +1400,9 @@ mod tests {
     fn interface_producer_macro_with_Field() {}
 }
 
-#[cfg(test)]
+// Only built by `score_com_concept-macros-unit-tests` (cfg set in BUILD). These tests need `score_com`,
+// which depends on `score_com_concept`, so they must not be part of the library's own test crate.
+#[cfg(all(test, standalone_macro_tests))]
 #[allow(dead_code)]
 #[allow(unused_imports)]
 mod validation_tests {
@@ -1429,10 +1431,7 @@ mod validation_tests {
                 // the compiler enforces the name at compile time.
                 let interface_id = <VehicleInterface as score_com::Interface>::INTERFACE_ID;
                 let expected_id = concat!(module_path!(), "::", "Vehicle");
-                assert_eq!(
-                    interface_id, expected_id,
-                    "Interface ID mismatch for VehicleInterface"
-                );
+                assert_eq!(interface_id, expected_id, "Interface ID mismatch for VehicleInterface");
             }
         }
         test_module::validate();
@@ -1442,8 +1441,7 @@ mod validation_tests {
     fn test_consumer_type_generated() {
         mod test_module {
             use score_com::{
-                CommData, Consumer, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc,
-                Subscriber,
+                CommData, Consumer, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc, Subscriber,
             };
 
             #[derive(Debug, Reloc, Clone)]
@@ -1487,8 +1485,7 @@ mod validation_tests {
     fn test_producer_type_generated() {
         mod test_module {
             use score_com::{
-                CommData, LolaRuntimeImpl as LolaRuntime, Producer, ProviderInfo, Publisher, Reloc,
-                Subscriber,
+                CommData, LolaRuntimeImpl as LolaRuntime, Producer, ProviderInfo, Publisher, Reloc, Subscriber,
             };
 
             #[derive(Debug, Reloc, Clone)]
@@ -1518,8 +1515,7 @@ mod validation_tests {
     fn test_offered_producer_type_generated() {
         mod test_module {
             use score_com::{
-                CommData, LolaRuntimeImpl as LolaRuntime, Producer, ProviderInfo, Publisher, Reloc,
-                Subscriber,
+                CommData, LolaRuntimeImpl as LolaRuntime, Producer, ProviderInfo, Publisher, Reloc, Subscriber,
             };
 
             #[derive(Debug, Reloc, Clone)]
@@ -1588,8 +1584,7 @@ mod validation_tests {
     fn test_interface_with_multiple_events_validation() {
         mod test_module {
             use score_com::{
-                CommData, Interface, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher,
-                Reloc, Subscriber,
+                CommData, Interface, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc, Subscriber,
             };
 
             #[derive(Debug, Reloc, Clone)]
@@ -1650,8 +1645,7 @@ mod validation_tests {
     fn test_interface_type_consistency_across_traits() {
         mod test_module {
             use score_com::{
-                CommData, Interface, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher,
-                Reloc, Subscriber,
+                CommData, Interface, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc, Subscriber,
             };
 
             #[derive(Debug, Reloc, Clone)]
@@ -1691,10 +1685,7 @@ mod validation_tests {
     #[test]
     fn test_interface_naming_convention_validation() {
         mod test_module {
-            use score_com::{
-                CommData, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc,
-                Subscriber,
-            };
+            use score_com::{CommData, LolaRuntimeImpl as LolaRuntime, ProviderInfo, Publisher, Reloc, Subscriber};
 
             #[derive(Debug, Reloc, Clone)]
             #[repr(C)]

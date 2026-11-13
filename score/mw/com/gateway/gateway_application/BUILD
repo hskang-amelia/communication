@@ -13,7 +13,6 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//quality/unit_testing:unit_testing.bzl", "cc_unit_test")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
 
 package(
     default_visibility = ["//score/mw/com/gateway:__subpackages__"],
@@ -23,7 +22,6 @@ cc_library(
     name = "gateway_application",
     srcs = ["gateway_application.cpp"],
     hdrs = ["gateway_application.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":gateway_error",
         "//score/mw/com/gateway/transport_layer:transport_error",
@@ -31,9 +29,7 @@ cc_library(
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/mw/log",
     ],
-    visibility = [
-        "//score/mw/com/gateway:__subpackages__",
-    ],
+    visibility = ["//score/mw/com/gateway:__subpackages__"],
     deps = [
         ":gateway_core",
         "//score/mw/com:types",
@@ -48,7 +44,6 @@ cc_library(
     name = "gateway_core",
     srcs = ["gateway_core.cpp"],
     hdrs = ["gateway_core.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
     ],
@@ -65,7 +60,6 @@ cc_library(
     name = "gateway_error",
     srcs = ["gateway_error.cpp"],
     hdrs = ["gateway_error.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
     ],
@@ -75,7 +69,6 @@ cc_library(
 cc_unit_test(
     name = "gateway_error_test",
     srcs = ["gateway_error_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":gateway_error",
         "@score_baselibs//score/result",
@@ -85,7 +78,6 @@ cc_unit_test(
 cc_unit_test(
     name = "gateway_application_test",
     srcs = ["gateway_application_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":gateway_application",
         ":gateway_error",
@@ -119,7 +111,6 @@ cc_library(
     name = "gateway_core_mock",
     srcs = ["gateway_core_mock.cpp"],
     hdrs = ["gateway_core_mock.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
     ],

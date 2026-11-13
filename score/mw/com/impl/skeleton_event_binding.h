@@ -62,11 +62,13 @@ class SkeletonEventBinding
 
     /// \brief SampleType is previously allocated by middleware and provided by the user to indicate that he is finished
     /// filling the provided pointer with live.
-    virtual Result<void> Send(SampleAllocateePtr<void>, std::optional<SendTraceCallback>) noexcept = 0;
+    /// \details The trace callback is taken by const reference (instead of by value) and must only be invoked
+    /// synchronously within Send(), i.e. it must not be stored/moved for later use!
+    virtual Result<void> Send(SampleAllocateePtr<void>, const std::optional<SendTraceCallback>&) = 0;
 
     /// \brief Allocates memory for SampleType for the user to fill it. This is especially necessary for Zero-Copy
     /// implementations.
-    virtual Result<SampleAllocateePtr<void>> Allocate(SampleAllocateeGuard guard) noexcept = 0;
+    virtual Result<SampleAllocateePtr<void>> Allocate(SampleAllocateeGuard guard) = 0;
 
     /// \brief Retrieves the latest sample, intended to support the getter of a SkeletonField.
     virtual Result<SamplePtr<void>> GetLatestSample(QualityType quality_type) = 0;
@@ -84,12 +86,11 @@ class SkeletonEventBinding
     /// keep ownership of the callback and reuse it across multiple PrepareOffer() calls over the lifetime of the event
     /// (e.g. offer -> stop-offer -> offer again).
     /// \param initialize_sample_callback Optional callback to initialize a sample in the underlying type_erased storage
-    virtual Result<void> PrepareOffer(
-        const std::optional<InitializeSampleCallback>& initialize_sample_callback) noexcept = 0;
+    virtual Result<void> PrepareOffer(const std::optional<InitializeSampleCallback>& initialize_sample_callback) = 0;
 
     /// \brief Used to indicate that the event shall no longer be available to consumer (e.g. binding specific
     /// de-initialization)
-    virtual void PrepareStopOffer() noexcept = 0;
+    virtual void PrepareStopOffer() = 0;
 
     /// \brief Get size and alignment for the underlying event-type.
     virtual memory::DataTypeSizeInfo GetEventDataTypeSizeInfo() const = 0;
@@ -99,20 +100,6 @@ class SkeletonEventBinding
 
     /// \todo To be removed in Ticket-134850
     virtual void SetSkeletonEventTracingData(impl::tracing::SkeletonEventTracingData tracing_data) noexcept = 0;
-
-    /// \brief Trigger notification of potential registered receive handlers.
-    /// \details This is a specific API for the gateway use-case!
-    /// \todo With SWP-281633 this will be moved to a separate interface.
-    virtual Result<void> Notify() noexcept = 0;
-
-    /// \brief Sets a callback that will be called when the first ReceiveHandler of a GenericEvent
-    /// will get registered or the last ReceiveHandler will be removed.
-    /// \details This is a specific API for the gateway use-case!
-    /// \todo With SWP-281633 this will be moved to a separate interface.
-    virtual Result<void> SetReceiveHandlerRegistrationChangedHandler(
-        ReceiveHandlerRegistrationChangedCallback callback) noexcept = 0;
-
-    virtual Result<void> UnsetReceiveHandlerRegistrationChangedHandler() noexcept = 0;
 };
 
 }  // namespace score::mw::com::impl

@@ -46,6 +46,14 @@ std::string_view GetEventName(const InstanceIdentifier& identifier, std::string_
             }
             return {};
         },
+        [&](const SomeIpServiceTypeDeployment& deployment) -> std::string_view {
+            const auto it = deployment.events_.find(std::string{search_name});
+            if (it != deployment.events_.end())
+            {
+                return it->first;  // Return the stable address of the Key from the Config Map
+            }
+            return {};
+        },
         [](const score::cpp::blank&) noexcept -> std::string_view {
             return {};
         });
@@ -127,11 +135,13 @@ Result<GenericSkeleton> GenericSkeleton::Create(const InstanceIdentifier& identi
                                       std::forward_as_tuple(stable_name),
                                       std::forward_as_tuple(skeleton, stable_name, std::move(event_binding_ptr)));
 
+        // COV_JUSTIFIED_START generic-skeleton-event-emplace-failure-unreachable
         if (!emplace_result.second)
         {
             score::mw::log::LogError("GenericSkeleton") << "Failed to emplace event in map: " << info.name;
             return MakeUnexpected(ComErrc::kBindingFailure);
         }
+        // COV_JUSTIFIED_STOP
     }
 
     return skeleton;

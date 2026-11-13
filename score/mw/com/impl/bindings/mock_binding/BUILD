@@ -12,16 +12,61 @@
 # *******************************************************************************
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@score_tooling//bazel/rules/rules_score:rules_score.bzl", "component")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
+load("@score_tooling//bazel/rules/rules_score:rules_score.bzl", "component", "unit")
 
 component(
-    name = "mock_component",
-    components = [],
+    name = "mock_binding_component",
+    components = [
+        ":proxy_and_service_elements",
+        ":generic_proxy_and_service_elements",
+        ":skeleton_and_service_elements",
+        ":generic_skeleton_and_service_elements",
+    ],
+    design_name = "mock_binding",
     requirements = [],
     target_compatible_with = ["@platforms//os:linux"],
     tests = [],
-    visibility = ["//score/mw/com/impl/bindings:__pkg__"],
+    visibility = ["//score/mw/com/dependability:__pkg__"],
+)
+
+unit(
+    name = "proxy_and_service_elements",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/bindings/mock_binding/dependability/proxy_and_service_elements:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "skeleton_and_service_elements",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/bindings/mock_binding/dependability/skeleton_and_service_elements:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "generic_proxy_and_service_elements",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/bindings/mock_binding/dependability/generic_proxy_and_service_elements:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "generic_skeleton_and_service_elements",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/bindings/mock_binding/dependability/generic_skeleton_and_service_elements:unit_design",
+    ],
+    implementation = [],
 )
 
 cc_library(
@@ -29,6 +74,7 @@ cc_library(
     testonly = True,
     srcs = [
         "generic_proxy_event.cpp",
+        "generic_skeleton_event.cpp",
         "proxy.cpp",
         "proxy_event.cpp",
         "proxy_method.cpp",
@@ -38,6 +84,7 @@ cc_library(
     ],
     hdrs = [
         "generic_proxy_event.h",
+        "generic_skeleton_event.h",
         "proxy.h",
         "proxy_event.h",
         "proxy_method.h",
@@ -45,13 +92,13 @@ cc_library(
         "skeleton_event.h",
         "skeleton_method.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com:__subpackages__",
     ],
     deps = [
         ":sample_ptr",
         "//score/mw/com/impl:generic_proxy_event_binding",
+        "//score/mw/com/impl:generic_skeleton_event_binding",
         "//score/mw/com/impl:proxy_binding",
         "//score/mw/com/impl:proxy_event_binding",
         "//score/mw/com/impl:skeleton_binding",
@@ -68,7 +115,6 @@ cc_library(
     name = "sample_ptr",
     srcs = ["sample_ptr.cpp"],
     hdrs = ["sample_ptr.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com/impl/plumbing:__pkg__"],
     deps = [
@@ -80,7 +126,6 @@ cc_library(
     name = "sample_allocatee_ptr",
     srcs = ["sample_allocatee_ptr.cpp"],
     hdrs = ["sample_allocatee_ptr.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com/impl/plumbing:__pkg__"],
     deps = [

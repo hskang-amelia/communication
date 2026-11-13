@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *******************************************************************************/
 
+#include "score/mw/com/test/partial_restart/proxy_restart_shall_not_affect_other_proxies/consumer.h"
 #include "score/mw/com/runtime.h"
 #include "score/mw/com/test/common_test_resources/check_point_control.h"
 #include "score/mw/com/test/common_test_resources/consumer_resources.h"
@@ -187,6 +188,10 @@ void PerformFirstConsumerActions(CheckPointControl& check_point_control,
     const auto proceed_instruction = WaitForChildProceed(check_point_control, stop_token);
     std::cout << "First Consumer Step (7): received parent command to proceed\n";
 
+    if (proceed_instruction == CheckPointControl::ProceedInstruction::WAIT_FOR_KILL)
+    {
+        IdleUntilKilled(check_point_control);
+    }
     if (proceed_instruction != CheckPointControl::ProceedInstruction::FINISH_ACTIONS)
     {
         std::cerr << "Provider Step (P.3): Unexpected proceed instruction received: "

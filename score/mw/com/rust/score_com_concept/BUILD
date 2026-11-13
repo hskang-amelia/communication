@@ -19,7 +19,7 @@ rust_library(
     srcs = glob(["**/*.rs"]),
     proc_macro_deps = [
         "//score/mw/com/rust/score_com_macros:score-com-macros",
-        "@score_communication_crate_index//:paste",
+        "@score_communication_crate_index//:pastey",
     ],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -35,10 +35,10 @@ rust_library(
 rust_test(
     name = "score_com_concept-test",
     crate = ":score_com_concept",
-    tags = ["manual"],
+    # Linux only until QNX build is enabled for Rust tests: https://github.com/eclipse-score/communication/issues/1278
+    target_compatible_with = ["@platforms//os:linux"],
     deps = [
         ":score_com_concept",
-        "//score/mw/com/rust:score_com",
     ],
 )
 
@@ -54,9 +54,13 @@ rust_doc_test(
     deps = ["//score/mw/com/rust:score_com"],
 )
 
+# Compiles interface_macros.rs as a standalone crate to run the `interface!` validation tests.
+# They need `score_com`, which depends on `score_com_concept`, so they cannot run in
+# `score_com_concept-test` without a circular dependency.
 rust_unit_test(
     name = "score_com_concept-macros-unit-tests",
     srcs = ["interface_producer_macros.rs"],
     features = ["link_std_cpp_lib"],
+    rustc_flags = ["--cfg=standalone_macro_tests"],
     deps = ["//score/mw/com/rust:score_com"],
 )

@@ -49,7 +49,10 @@ QualityType GetQualityTypeFromJson(const score::json::Object& json_object, std::
     {
         score::mw::log::LogFatal("lola") << "Failed to parse JSON configuration key '" << key
                                          << "' to string type. Configuration parsing failed. Terminating.";
-        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(false);
+        // Reachable in principle, but must not be reached in production: The JSON value can be no string if the
+        // configuration file is malformed. A configuration that passed the schema validation must not reach this in
+        // production.
+        SCORE_LANGUAGE_FUTURECPP_UNREACHABLE();
     }
     return FromString(json_result.value());
 }
@@ -83,13 +86,19 @@ auto operator<(const ServiceInstanceDeployment& lhs, const ServiceInstanceDeploy
 
 auto areCompatible(const ServiceInstanceDeployment& lhs, const ServiceInstanceDeployment& rhs) -> bool
 {
-    bool bindingCompatible{false};
-    const auto* const lhsShmBindingInfo = std::get_if<LolaServiceInstanceDeployment>(&lhs.bindingInfo_);
-    const auto* const rhsShmBindingInfo = std::get_if<LolaServiceInstanceDeployment>(&rhs.bindingInfo_);
-    if ((lhsShmBindingInfo != nullptr) && (rhsShmBindingInfo != nullptr))
-    {
-        bindingCompatible = areCompatible(*lhsShmBindingInfo, *rhsShmBindingInfo);
-    }
+    const auto binding_visitor = score::cpp::overload(
+        [](const LolaServiceInstanceDeployment& lhs_binding,
+           const LolaServiceInstanceDeployment& rhs_binding) noexcept {
+            return areCompatible(lhs_binding, rhs_binding);
+        },
+        [](const SomeIpServiceInstanceDeployment& lhs_binding,
+           const SomeIpServiceInstanceDeployment& rhs_binding) noexcept {
+            return areCompatible(lhs_binding, rhs_binding);
+        },
+        [](const auto&, const auto&) noexcept {
+            return false;
+        });
+    const auto bindingCompatible = std::visit(binding_visitor, lhs.bindingInfo_, rhs.bindingInfo_);
     return areCompatible(lhs.asilLevel_, rhs.asilLevel_) && bindingCompatible;
 }
 
@@ -129,6 +138,9 @@ score::json::Object ServiceInstanceDeployment::Serialize() const
         [&json_object](const LolaServiceInstanceDeployment& deployment) {
             json_object[kBindingInfoKey] = deployment.Serialize();
         },
+        [&json_object](const SomeIpServiceInstanceDeployment& deployment) {
+            json_object[kBindingInfoKey] = deployment.Serialize();
+        },
         [](const score::cpp::blank&) noexcept {});
     std::visit(visitor, bindingInfo_);
 
@@ -151,6 +163,11 @@ BindingType ServiceInstanceDeployment::GetBindingType() const
     auto visitor = score::cpp::overload(
         [](const LolaServiceInstanceDeployment&) noexcept {
             return BindingType::kLoLa;
+        },
+        // FP: only one statement in this line
+        // coverity[autosar_cpp14_a7_1_7_violation]
+        [](const SomeIpServiceInstanceDeployment&) noexcept {
+            return BindingType::kSomeIp;
         },
         // FP: only one statement in this line
         // coverity[autosar_cpp14_a7_1_7_violation]

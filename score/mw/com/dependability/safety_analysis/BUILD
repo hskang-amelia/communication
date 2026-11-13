@@ -15,7 +15,9 @@ load(
     "@score_tooling//bazel/rules/rules_score:rules_score.bzl",
     "assumptions_of_use",
     "dependability_analysis",
-    "fmea",
+    "failure_modes",
+    "fault_trees",
+    "safety_analysis",
 )
 
 # Root Causes
@@ -30,13 +32,19 @@ filegroup(
     visibility = ["//score/mw/com/dependability:__subpackages__"],
 )
 
-fmea(
-    name = "mw_com_fmea",
-    arch_design = "//score/mw/com/dependability/software_architectural_design/static_design:software_architectural_design",
-    controlmeasures = ["aou.trlc"],
-    failuremodes = ["failure_modes.trlc"],
-    root_causes = [":root_causes"],
+failure_modes(
+    name = "mw_com_failure_modes",
+    srcs = ["failure_modes.trlc"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+fault_trees(
+    name = "mw_com_fault_trees",
+    srcs = [":root_causes"],
+    fta_package = "mw_com_fta",
+    target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//score/mw/com/dependability:__subpackages__"],
+    deps = [":mw_com_failure_modes"],
 )
 
 assumptions_of_use(
@@ -46,14 +54,23 @@ assumptions_of_use(
     visibility = ["//score/mw/com/dependability:__subpackages__"],
 )
 
+safety_analysis(
+    name = "mw_com_safety_analysis",
+    assessments = ["assessments.trlc"],
+    failure_modes = [":mw_com_failure_modes"],
+    fault_trees = ":mw_com_fault_trees",
+    safety_measures = [":aous"],
+    visibility = ["//score/mw/com/dependability:__subpackages__"],
+)
+
 # dependable_element consumes DependabilityAnalysisInfo, which only this rule
-# provides -- passing the fmea target directly drops it from traceability.
+# provides -- passing the safety_analysis target directly drops it from traceability.
 # maturity="development": traceability chain (public_api wiring, AoU root-cause
 # links) is not complete yet -- see communication#1075 for the migration plan.
 dependability_analysis(
     name = "mw_com_dependability_analysis",
-    arch_design = "//score/mw/com/dependability/software_architectural_design/static_design:software_architectural_design",
-    fmea = [":mw_com_fmea"],
+    arch_design = "//score/mw/com/dependability/architectural_design:software_architectural_design",
     maturity = "development",
+    safety_analysis = [":mw_com_safety_analysis"],
     visibility = ["//score/mw/com/dependability:__subpackages__"],
 )

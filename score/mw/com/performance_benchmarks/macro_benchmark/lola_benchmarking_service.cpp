@@ -63,7 +63,7 @@ bool RunService(const ServiceConfig& config, score::cpp::stop_token test_stop_to
         return false;
     }
 
-    auto skeleton_result = TestDataSkeleton::Create(std::move(instance_specifier_result.value()));
+    auto skeleton_result = TestDataSkeleton::Create(instance_specifier_result.value());
 
     if (!skeleton_result.has_value())
     {
@@ -146,7 +146,7 @@ int main(int argc, const char** argv)
         return EXIT_FAILURE;
     }
 
-    auto args = args_maybe.value();
+    const auto& args = args_maybe.value();
 
     score::mw::com::test::InitializeRuntime(args.service_instance_manifest);
     auto config = score::mw::com::test::ParseServiceConfig(args.config_path, kLogContext);

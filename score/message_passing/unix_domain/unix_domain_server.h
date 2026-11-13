@@ -36,6 +36,7 @@ class UnixDomainServer final : public IServer
 
         // User methods
         const ClientIdentity& GetClientIdentity() const& noexcept override;
+        const ClientIdentity&& GetClientIdentity() const&& noexcept = delete;
         UserData& GetUserData() noexcept override;
 
         score::cpp::expected_blank<score::os::Error> Reply(
@@ -49,6 +50,11 @@ class UnixDomainServer final : public IServer
         bool ProcessInput();
 
         ~ServerConnection() noexcept;
+
+        ServerConnection(const ServerConnection&) = delete;
+        ServerConnection& operator=(const ServerConnection&) = delete;
+        ServerConnection(ServerConnection&&) = delete;
+        ServerConnection& operator=(ServerConnection&&) = delete;
 
       private:
         UnixDomainServer& server_;
@@ -64,11 +70,16 @@ class UnixDomainServer final : public IServer
                      const IServerFactory::ServerConfig& server_config) noexcept;
     ~UnixDomainServer() noexcept override;
 
+    UnixDomainServer(const UnixDomainServer&) = delete;
+    UnixDomainServer& operator=(const UnixDomainServer&) = delete;
+    UnixDomainServer(UnixDomainServer&&) = delete;
+    UnixDomainServer& operator=(UnixDomainServer&&) = delete;
+
     score::cpp::expected_blank<score::os::Error> StartListening(
         ConnectCallback connect_callback,
-        DisconnectCallback disconnect_callback = DisconnectCallback{},
-        MessageCallback sent_callback = MessageCallback{},
-        MessageCallback sent_with_reply_callback = MessageCallback{}) noexcept override;
+        DisconnectCallback disconnect_callback,
+        MessageCallback sent_callback,
+        MessageCallback sent_with_reply_callback) noexcept override;
 
     void StopListening() noexcept override;
 

@@ -12,6 +12,7 @@
  ********************************************************************************/
 #include "score/mw/com/doc/tutorial/chapter_6/hello_world_service.h"
 #include "score/mw/com/types.h"
+#include "score/string_manipulation/arguments/arguments.h"
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -32,8 +34,10 @@ using HelloWorldProxy = score::mw::com::AsProxy<score::mw::com::tutorial::HelloW
 
 // Deduce the sample type of the "message" event from the proxy member (public SampleType alias of ProxyEvent) instead
 // of referencing internal (impl-namespace) types. The GetNewSamples() receiver is handed a SamplePtr<SampleType>.
+// [consumer-sample-ptr-type-start]
 using MessageSampleType = decltype(HelloWorldProxy::message)::SampleType;
 using MessageSamplePtr = score::mw::com::SamplePtr<MessageSampleType>;
+// [consumer-sample-ptr-type-end]
 
 namespace
 {
@@ -50,15 +54,17 @@ int main(int argc, const char** argv)
 {
     // The consumer takes exactly one command-line argument: the "max_sample_count" it uses when subscribing. This value
     // expresses how many samples (SamplePtrs) the consumer wants to be able to hold in parallel.
-    if (argc != 2)
+    const auto arguments = score::string_manipulation::GetArguments(argc, argv);
+    if (arguments.size() != 2U)
     {
-        std::cerr << "Usage: " << argv[0] << " <max_sample_count>" << std::endl;
+        std::cerr << "Usage: " << std::string_view{arguments.at(0U)} << " <max_sample_count>" << std::endl;
         return EXIT_FAILURE;
     }
-    const auto parsed_max_sample_count = std::atoi(argv[1]);
+    const auto parsed_max_sample_count = std::atoi(arguments.at(1U).c_str());
     if (parsed_max_sample_count <= 0)
     {
-        std::cerr << "Invalid max_sample_count '" << argv[1] << "'. It must be a positive integer." << std::endl;
+        std::cerr << "Invalid max_sample_count '" << std::string_view{arguments.at(1U)}
+                  << "'. It must be a positive integer." << std::endl;
         return EXIT_FAILURE;
     }
     const auto max_sample_count = static_cast<std::size_t>(parsed_max_sample_count);
@@ -129,6 +135,7 @@ int main(int argc, const char** argv)
     // received SamplePtr immediately at the end of the GetNewSamples() callback - this consumer keeps the SamplePtrs
     // by moving them out of the callback into this deque. It therefore holds up to 'max_sample_count' samples in
     // parallel, which is exactly what it announced in its Subscribe() call. The oldest sample is at the front.
+    // [consumer-keep-sample-ptrs-start]
     std::deque<MessageSamplePtr> held_samples{};
 
     while (g_running.load(std::memory_order_relaxed))
@@ -164,6 +171,7 @@ int main(int argc, const char** argv)
             std::cerr << "Failed to get new samples: " << get_new_samples_result.error() << std::endl;
         }
     }
+    // [consumer-keep-sample-ptrs-end]
 
     // Stop the asynchronous service discovery before shutting down (no-op if it was already stopped by the handler).
     score::cpp::ignore = HelloWorldProxy::StopFindService(find_service_handle_result.value());

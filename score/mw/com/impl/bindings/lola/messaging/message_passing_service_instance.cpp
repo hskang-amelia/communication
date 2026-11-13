@@ -77,7 +77,7 @@ struct UnsubscribeServiceMethodUnserializedPayload
 struct MethodCallUnserializedPayload
 {
     ProxyMethodInstanceIdentifier proxy_method_instance_identifier;
-    std::size_t queue_position;
+    std::size_t queue_position{};
 };
 
 using MethodUnserializedReply = score::Result<void>;
@@ -149,11 +149,13 @@ auto SerializeToMessage(const std::uint8_t message_id, const T& t) noexcept -> s
     // cpp/misra/pointer-argument-to-cstring-function-is-invalid check reasons about the size of memcpy's read
     // buffer per call site, but for a templated memcpy call it can conflate the buffer size of one instantiation
     // of T with the size argument of another instantiation, producing a false-positive size mismatch. Deriving the
-    // source range directly from the same pointer (source_begin / source_end) that is copied keeps the range
+    // source range directly from the same pointer (source_begin, sizeof(T)) that is copied keeps the range
     // trivially self-consistent for every instantiation of T.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): byte-wise view of a trivially copyable object
     const auto* const source_begin = reinterpret_cast<const std::uint8_t*>(&t);
-    const auto* const source_end = source_begin + sizeof(T);
-    std::copy(source_begin, source_end, std::next(out.begin()));
+    const score::cpp::span<const std::uint8_t> source{source_begin, sizeof(T)};
+    const score::cpp::span<std::uint8_t> destination{out};
+    std::ignore = std::copy(source.begin(), source.end(), destination.subspan(1U).begin());
     return out;
 }
 
@@ -199,8 +201,9 @@ bool IsMethodErrorRecoverable(const score::result::Error error)
     }
     else
     {
-        SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(false,
-                                                          "Provided error is not part of subset relating to methods.");
+        // Reachable in principle, but must not be reached in production: A caller can pass an error code outside the
+        // method-related subset. Callers must only pass method-related error codes in production.
+        SCORE_LANGUAGE_FUTURECPP_UNREACHABLE_MESSAGE("Provided error is not part of subset relating to methods.");
     }
 }
 
@@ -339,6 +342,7 @@ message_passing::MessageCallback MessagePassingServiceInstance::CreateSendMessag
                                                     "expiring. Disconnecting from client.";
                 return score::cpp::make_unexpected(os::Error::createUnspecifiedError());
             }
+            return {};
         }
 
         const auto& message_handling_result = function_invocation_result.value();
@@ -378,23 +382,28 @@ message_passing::MessageCallback MessagePassingServiceInstance::CreateSendMessag
 void MessagePassingServiceInstance::MessageCallback(const pid_t sender_pid,
                                                     const score::cpp::span<const std::uint8_t> message) noexcept
 {
-    if (message.size() < 1U)
+    if (message.empty())
     {
         score::mw::log::LogError("lola") << "MessagePassingService: Empty message received from " << sender_pid;
         return;
     }
     const auto payload = message.subspan(1U);
+    // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
     switch (message.front())
     {
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageType::kRegisterEventNotifier):
             HandleRegisterNotificationMsg(payload, sender_pid);
             break;
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageType::kUnregisterEventNotifier):
             HandleUnregisterNotificationMsg(payload, sender_pid);
             break;
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageType::kNotifyEvent):
             HandleNotifyEventMsg(payload, sender_pid);
             break;
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageType::kOutdatedNodeId):
             HandleOutdatedNodeIdMsg(payload, sender_pid);
             break;
@@ -410,22 +419,26 @@ score::Result<void> MessagePassingServiceInstance::MessageCallbackWithReply(
     const pid_t sender_pid,
     const score::cpp::span<const std::uint8_t> message)
 {
-    if (message.size() < 1U)
+    if (message.empty())
     {
         score::mw::log::LogError("lola") << "MessagePassingService: Empty message received from " << sender_pid;
         return MakeUnexpected(MethodErrc::kUnexpectedMessageSize);
     }
     const auto payload = message.subspan(1U);
+    // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
     switch (message.front())
     {
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageWithReplyType::kSubscribeServiceMethod):
         {
             return HandleSubscribeServiceMethodMsg(payload, sender_uid, sender_pid);
         }
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageWithReplyType::kUnsubscribeServiceMethod):
         {
             return HandleUnsubscribeServiceMethodMsg(payload, sender_pid);
         }
+        // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(switch-enum-underlying-type-discriminant)
         case score::cpp::to_underlying(MessageWithReplyType::kCallMethod):
         {
             return HandleCallMethodMsg(payload, sender_uid);
@@ -876,7 +889,7 @@ void MessagePassingServiceInstance::NotifyEventRemote(const ElementFqId event_id
     NodeIdTmpBufferType nodeIdentifiersTmp;
     pid_t start_node_id{0};
     const auto message = SerializeToMessage(score::cpp::to_underlying(MessageType::kNotifyEvent), event_id);
-    std::pair<std::uint8_t, bool> num_ids_copied;
+    std::pair<std::uint32_t, bool> num_ids_copied;
     std::uint8_t loop_count{0U};
     do
     {
@@ -899,7 +912,7 @@ void MessagePassingServiceInstance::NotifyEventRemote(const ElementFqId event_id
                                              nodeIdentifiersTmp,
                                              start_node_id);
         // send NotifyEventUpdateMessage to each node_id in nodeIdentifiersTmp
-        for (std::uint8_t i = 0U; i < num_ids_copied.first; i++)
+        for (std::uint32_t i = 0U; i < num_ids_copied.first; i++)
         {
             // Suppress "AUTOSAR C++14 M5-0-3" rule findings. This rule states: "A cvalue expression shall
             // not be implicitly converted to a different underlying type"
@@ -962,7 +975,7 @@ std::uint32_t MessagePassingServiceInstance::NotifyEventLocally(const ElementFqI
     // tmp-storage for all handlers (weak_ptrs), which will get filled under read-lock
     std::array<std::weak_ptr<ScopedEventReceiveHandler>, kMaxReceiveHandlersPerEvent> handler_weak_ptrs{
         {{}, {}, {}, {}, {}}};
-    std::uint8_t number_weak_ptrs_copied{0U};
+    std::uint32_t number_weak_ptrs_copied{0U};
     auto& handlers_for_event = search->second;
     auto handler_it = handlers_for_event.cbegin();
     // LCOV_EXCL_START: decision couldn't be analyzed; considered normal under 100% line coverage
@@ -988,7 +1001,7 @@ std::uint32_t MessagePassingServiceInstance::NotifyEventLocally(const ElementFqI
     }
 
     // Call the handlers outside the read-lock
-    for (std::uint8_t i = 0U; i < number_weak_ptrs_copied; i++)
+    for (std::uint32_t i = 0U; i < number_weak_ptrs_copied; i++)
     {
         // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): "i" is assured to be within array bounds.
         if (auto current_handler = handler_weak_ptrs[i].lock())
@@ -1517,21 +1530,6 @@ void MessagePassingServiceInstance::UnregisterEventNotificationExistenceChangedC
         score::mw::log::LogWarn("lola")
             << "MessagePassingService: UnregisterEventNotificationExistenceChangedCallback called for event "
             << event_id.ToString() << " but no callback was registered";
-    }
-}
-
-QualityType MessagePassingServiceInstance::GetPartnerQualityType() const
-{
-    switch (asil_level_)
-    {
-        case ClientQualityType::kASIL_QM:
-            return QualityType::kASIL_QM;
-        case ClientQualityType::kASIL_B:
-            return QualityType::kASIL_B;
-        case ClientQualityType::kASIL_QMfromB:
-            return QualityType::kASIL_QM;
-        default:
-            std::terminate();
     }
 }
 

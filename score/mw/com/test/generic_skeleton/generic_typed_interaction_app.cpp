@@ -14,8 +14,10 @@
 #include "score/mw/com/runtime_configuration.h"
 #include "score/mw/com/test/common_test_resources/stop_token_sig_term_handler.h"
 #include "score/mw/log/logging.h"
+#include "score/string_manipulation/arguments/arguments.h"
 #include <score/stop_token.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -36,7 +38,7 @@ struct MyEventData
 {
     std::uint64_t counter;
 #if PAYLOAD_SIZE > 8
-    char padding[PAYLOAD_SIZE - 8];
+    std::array<char, PAYLOAD_SIZE - 8> padding;
 #endif
 };
 
@@ -216,17 +218,18 @@ int run_consumer()
 
 int main(int argc, const char* argv[])
 {
+    const auto arguments = score::string_manipulation::GetArguments(argc, argv);
     std::string mode;
-    for (int i = 1; i < argc; ++i)
+    for (std::size_t i = 1U; i < arguments.size(); ++i)
     {
-        std::string arg = argv[i];
-        if (arg == "--mode" && i + 1 < argc)
+        const std::string_view arg{arguments[i]};
+        if (arg == "--mode" && i + 1U < arguments.size())
         {
-            mode = argv[++i];
+            mode = arguments[++i];
         }
     }
 
-    score::mw::com::runtime::InitializeRuntime(score::mw::com::runtime::RuntimeConfiguration(argc, argv));
+    score::mw::com::runtime::InitializeRuntime(score::mw::com::runtime::RuntimeConfiguration(arguments));
 
     score::cpp::stop_source stop_source{};
     score::mw::com::SetupStopTokenSigTermHandler(stop_source);

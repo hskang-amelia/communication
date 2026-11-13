@@ -31,14 +31,6 @@ namespace score::memory::shared
 
 namespace test
 {
-// Suppress "AUTOSAR C++14 M3-2-3" rule finding: "A type, object or function that is used in multiple translation units
-// shall be declared in one and only one file.".
-// The forward declaration of MemoryRegionMapAttorney is necessary to avoid cyclic dependencies and to ensure that the
-// MemoryRegionMapAttorney class can be declared without requiring the full definition of MemoryRegionMapAttorney. This
-// forward declaration does not violate the AUTOSAR C++14 M3-2-3 guideline as it is a common practice to handle
-// dependencies in large codebases. The full definition of MemoryRegionMapAttorney will be provided elsewhere in the
-// codebase.
-// coverity[autosar_cpp14_m3_2_3_violation]
 class MemoryRegionMapAttorney;
 }  // namespace test
 
@@ -54,10 +46,6 @@ namespace detail
 ///          score/memory/design/shared_memory/Readme.md - chapter Bounds_Checking_Performance
 
 template <template <class> class AtomicIndirectorType = concurrency::AtomicIndirectorReal>
-// Suppress "AUTOSAR C++14 M3-2-3" rule finding: "A type, object or function that is used in multiple translation units
-// shall be declared in one and only one file.".
-// this is false positive. MemoryRegionMapImpl is declared only once.
-// coverity[autosar_cpp14_m3_2_3_violation : FALSE]
 class MemoryRegionMapImpl final
 {
     // Suppress "AUTOSAR C++14 A11-3-1" rule finding: "Friend declarations shall not be used.".
@@ -138,7 +126,7 @@ class MemoryRegionMapImpl final
     // being given values that are not subsequently used.".
     // Rationale: False positive - variable is used below.
     // coverity[autosar_cpp14_a0_1_1_violation : FALSE]
-    static constexpr const std::uint8_t VERSION_COUNT{10U};
+    static constexpr const std::uint32_t VERSION_COUNT{10U};
     static_assert(
         VERSION_COUNT <= 255U,
         "VERSION_COUNT needs to be smaller than 255 as our latest_known_region_version_ tracker is an uint8 ");

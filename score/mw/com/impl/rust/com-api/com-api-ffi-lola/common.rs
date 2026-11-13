@@ -1,4 +1,4 @@
-/********************************************************************************
+/*******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 //! Common FFI types shared across `bridge_ffi` and its implementations.
 //!
@@ -41,20 +41,13 @@ pub struct NativeInstanceSpecifier {
 }
 
 unsafe extern "C" {
-    pub(crate) fn mw_com_impl_instance_specifier_create(
-        value: *const u8,
-        len: u32,
-    ) -> *mut NativeInstanceSpecifier;
+    pub(crate) fn mw_com_impl_instance_specifier_create(value: *const u8, len: u32) -> *mut NativeInstanceSpecifier;
     pub(crate) fn mw_com_impl_instance_specifier_clone(
         instance_specifier: *const NativeInstanceSpecifier,
     ) -> *mut NativeInstanceSpecifier;
-    pub(crate) fn mw_com_impl_instance_specifier_delete(
-        instance_specifier: *mut NativeInstanceSpecifier,
-    );
+    pub(crate) fn mw_com_impl_instance_specifier_delete(instance_specifier: *mut NativeInstanceSpecifier);
     pub(crate) fn mw_com_impl_handle_container_delete(container: *mut NativeHandleContainer);
-    pub(crate) fn mw_com_impl_handle_container_get_size(
-        container: *const NativeHandleContainer,
-    ) -> u32;
+    pub(crate) fn mw_com_impl_handle_container_get_size(container: *const NativeHandleContainer) -> u32;
     pub(crate) fn mw_com_impl_handle_container_get_handle_at(
         container: *const NativeHandleContainer,
         pos: u32,
@@ -84,8 +77,7 @@ impl TryFrom<&'_ str> for InstanceSpecifier {
 
     fn try_from(value: &'_ str) -> Result<Self, Self::Error> {
         // SAFETY: value points to a valid UTF-8 string; len matches the slice length.
-        let inner =
-            unsafe { mw_com_impl_instance_specifier_create(value.as_ptr(), value.len() as u32) };
+        let inner = unsafe { mw_com_impl_instance_specifier_create(value.as_ptr(), value.len() as u32) };
         if inner.is_null() {
             Err(())
         } else {

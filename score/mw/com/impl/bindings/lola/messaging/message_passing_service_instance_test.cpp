@@ -1,3 +1,16 @@
+/********************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
 #include "score/mw/com/impl/bindings/lola/messaging/message_passing_service_instance.h"
 #include "score/message_passing/mock/client_connection_mock.h"
 #include "score/message_passing/mock/client_factory_mock.h"
@@ -345,7 +358,7 @@ TEST_F(MessagePassingServiceInstanceTest, NotifyEventLocallyCallsNoMoreThanMaxPo
         });
 
     // and handler being registered for event (max_receive_handlers_per_event + 2) times
-    for (auto i = 0; i < MessagePassingServiceInstanceAttorney::max_receive_handlers_per_event + 2; ++i)
+    for (auto i = 0U; i < MessagePassingServiceInstanceAttorney::max_receive_handlers_per_event + 2U; ++i)
     {
         instance.RegisterEventNotification(event_id_, handler, local_pid_);
     }

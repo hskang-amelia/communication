@@ -53,8 +53,8 @@ class UnixDomainEngine final : public ISharedResourceEngine
         score::cpp::pmr::unique_ptr<score::os::Unistd> unistd{};
     };
 
-    UnixDomainEngine(score::cpp::pmr::memory_resource* memory_resource,
-                     LoggingCallback logger = GetCerrLogger()) noexcept;
+    explicit UnixDomainEngine(score::cpp::pmr::memory_resource* memory_resource,
+                              LoggingCallback logger = GetCerrLogger()) noexcept;
     ~UnixDomainEngine() noexcept override;
 
     UnixDomainEngine(const UnixDomainEngine&) = delete;
@@ -80,6 +80,7 @@ class UnixDomainEngine final : public ISharedResourceEngine
     {
         return logger_;
     }
+    const LoggingCallback&& GetLogger() && noexcept = delete;
 
     using FinalizeOwnerCallback = score::cpp::callback<void() /* noexcept */>;
 
@@ -94,7 +95,7 @@ class UnixDomainEngine final : public ISharedResourceEngine
     void EnqueueCommand(CommandQueueEntry& entry,
                         const TimePoint until,
                         CommandCallback callback,
-                        const void* const owner = nullptr) noexcept override;
+                        const void* const owner) noexcept override;
 
     // this call is blocking
     void CleanUpOwner(const void* const owner) noexcept override;
@@ -136,7 +137,7 @@ class UnixDomainEngine final : public ISharedResourceEngine
     OsResources os_resources_;
     LoggingCallback logger_;
 
-    std::array<std::int32_t, 2> pipe_fds_;
+    std::array<std::int32_t, 2> pipe_fds_{};
     bool quit_flag_;
     std::thread thread_;
     std::mutex thread_mutex_;

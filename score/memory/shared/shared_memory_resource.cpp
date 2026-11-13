@@ -127,7 +127,7 @@ class MakeSharedEnabler final : public SharedMemoryResource
 };
 
 template <typename... Args>
-static std::shared_ptr<SharedMemoryResource> CreateInstance(Args&&... args)
+std::shared_ptr<SharedMemoryResource> CreateInstance(Args&&... args)
 {
     return std::make_shared<MakeSharedEnabler>(std::forward<Args>(args)...);
 }
@@ -335,7 +335,7 @@ void SharedMemoryResource::UnlinkFilesystemEntry() const noexcept
             return;
         }
 
-        const auto unlink_result = typed_memory_ptr_->Unlink(path->c_str());
+        const auto unlink_result = typed_memory_ptr_->Unlink(*path);
         if (unlink_result.has_value())
         {
             score::mw::log::LogDebug("shm") << __func__ << "Shm " << *path << " unlinked";
@@ -422,7 +422,7 @@ score::cpp::expected<std::shared_ptr<SharedMemoryResource>, score::os::Error> Sh
     std::string input_path,
     const bool is_read_write,
     AccessControlListFactory acl_factory,
-    std::shared_ptr<score::memory::shared::TypedMemory> typed_memory_ptr) noexcept
+    std::shared_ptr<score::memory::shared::TypedMemory> typed_memory_ptr)
 {
     auto resource = CreateInstance(std::move(input_path), std::move(acl_factory), typed_memory_ptr);
     const auto result = resource->OpenImpl(is_read_write);
@@ -467,7 +467,7 @@ SharedMemoryResource::SharedMemoryResource(std::variant<std::string, std::uint64
                           ? std::optional{GetLockFilePath(std::get<std::string>(identifier))}
                           : std::nullopt},
       virtual_address_space_to_reserve_{},
-      typed_memory_ptr_{typed_memory_ptr},
+      typed_memory_ptr_{std::move(typed_memory_ptr)},
       opening_mode_{::score::os::Fcntl::Open::kReadOnly},
       map_mode_{::score::os::Mman::Protection::kRead},
       base_address_{nullptr},
@@ -1036,7 +1036,7 @@ void SharedMemoryResource::AllocateInTypedMemory(const UserPermissions& permissi
     if (path != nullptr)
     {
         const auto allocate_named_typed_memory_result =
-            typed_memory_ptr_->AllocateNamedTypedMemory(virtual_address_space_to_reserve_, path->c_str(), permissions);
+            typed_memory_ptr_->AllocateNamedTypedMemory(virtual_address_space_to_reserve_, *path, permissions);
         if (allocate_named_typed_memory_result.has_value())
         {
             score::mw::log::LogDebug("shm") << __func__ << "Shm is in TypedMemory. Set file open flags";

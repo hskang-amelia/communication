@@ -29,8 +29,10 @@ constexpr std::string_view kInstanceSpecifierString{"MyHelloWorldServiceInstance
 // (StopOfferService) and pauses sending for kStopOfferDuration. Then it offers the service again and resumes sending.
 // This offer/stop-offer cycle drives the subscription state of subscribed consumers between kSubscribed and
 // kSubscriptionPending.
+// [provider-offer-durations-start]
 constexpr std::chrono::seconds kOfferDuration{8};
 constexpr std::chrono::seconds kStopOfferDuration{5};
+// [provider-offer-durations-end]
 
 namespace
 {
@@ -57,11 +59,9 @@ void SendSample(HelloWorldSkeleton& service_instance, const std::size_t send_cou
 
     // Write new event data to the slot.
     const std::string message = std::string{"Hello World #"} + std::to_string(send_counter);
-    auto* const buf = sample_allocatee_ptr.value().Get()->data();
-    const auto capacity = sample_allocatee_ptr.value().Get()->size();
-    const auto chars_to_copy = std::min(message.size(), capacity - 1U);
-    std::memcpy(buf, message.data(), chars_to_copy);
-    buf[chars_to_copy] = '\0';
+    auto& sample = *sample_allocatee_ptr.value().Get();
+    const auto chars_to_copy = std::min(message.size(), sample.size() - 1U);
+    *std::copy_n(message.begin(), chars_to_copy, sample.begin()) = '\0';
 
     // Send the new event sample (make it visible to potential consumers)
     auto send_result = service_instance.message.Send(std::move(sample_allocatee_ptr.value()));
@@ -71,7 +71,7 @@ void SendSample(HelloWorldSkeleton& service_instance, const std::size_t send_cou
     }
     else
     {
-        std::cout << "Sample send completed. Event \"message\" update sent: " << buf << std::endl;
+        std::cout << "Sample send completed. Event \"message\" update sent: " << message << std::endl;
     }
 }
 }  // namespace
@@ -102,6 +102,7 @@ int main()
     while (g_running.load(std::memory_order_relaxed))
     {
         const auto now = std::chrono::steady_clock::now();
+        // [provider-phase-change-start]
         if (now >= next_phase_change)
         {
             if (offered)
@@ -128,15 +129,18 @@ int main()
                           << std::endl;
             }
         }
+        // [provider-phase-change-end]
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         // Only send event updates while the service is currently offered.
+        // [provider-send-while-offered-start]
         if (offered)
         {
             SendSample(service_instance, send_counter);
             ++send_counter;
         }
+        // [provider-send-while-offered-end]
     }
     std::cout << "HelloWorld service provider going down." << std::endl;
 }

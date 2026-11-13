@@ -1,4 +1,4 @@
-/********************************************************************************
+/*******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 ///This crate gives same memory layout as SampleAllocateePtr in C++ implementation
 ///It can be used for FFI bindings where SampleAllocateePtr is needed
@@ -18,11 +18,7 @@ use core::fmt::Debug;
 use std::mem::ManuallyDrop;
 
 use common_rs::{
-    BlankBinding,
-    ConsumerEventDataControlLocalView,
-    CxxOptional,
-    CustomDeleter,
-    ProviderEventDataControlLocalView,
+    BlankBinding, ConsumerEventDataControlLocalView, CustomDeleter, CxxOptional, ProviderEventDataControlLocalView,
     SlotIndexType,
 };
 
@@ -62,6 +58,21 @@ struct LolaSampleAllocateePtrBinding<T> {
     _consumer_data_control_local_: *mut ConsumerEventDataControlLocalView,
 }
 
+/// Mirror of `someip::SampleAllocateePtr`. Unlike the LoLa counterpart it is not templated on the sample type on
+/// the C++ side, but the generic parameter is kept here so that all alternatives of the variant share one shape.
+#[repr(C)]
+struct SomeIpSampleAllocateePtrBinding<T> {
+    _managed_object: *mut T,
+    _event_slot_index: SlotIndexType,
+    _slot_allocation_control: *mut core::ffi::c_void,
+}
+
+#[repr(C)]
+union SomeIpSampleAllocateePtrVariant<T> {
+    _variant: ManuallyDrop<SomeIpSampleAllocateePtrBinding<T>>,
+    _mock_binding: ManuallyDrop<MockBindingVariant<T>>,
+}
+
 #[repr(C)]
 union LolaSampleAllocateePtrVariant<T> {
     _variant: ManuallyDrop<LolaSampleAllocateePtrBinding<T>>,
@@ -92,16 +103,19 @@ unsafe impl<T> Send for SampleAllocateePtr<T> {}
 
 impl<T> Debug for SampleAllocateePtr<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Must match the alternative order of
+        // std::variant<score::cpp::blank, lola::SampleAllocateePtr, someip::SampleAllocateePtr,
+        //              mock_binding::SampleAllocateePtr>
+        // in score/mw/com/impl/plumbing/sample_allocatee_ptr.h.
         let state = match self._internal._index {
             0 => "Blank",
             1 => "LolaSampleAllocateePtr",
-            2 => "UniquePtr",
+            2 => "SomeIpSampleAllocateePtr",
+            3 => "UniquePtr",
             _ => "Unknown",
         };
 
-        f.debug_struct("SampleAllocateePtr")
-            .field("state", &state)
-            .finish()
+        f.debug_struct("SampleAllocateePtr").field("state", &state).finish()
     }
 }
 
@@ -132,21 +146,13 @@ mod tests {
     #[test]
     fn test_sample_allocatee_ptr_variant_user_defined_type_size() {
         let cpp_size = SampleAllocateePtrLola::get_variant_user_defined_type();
-        verify_size_and_align!(
-            SampleAllocateePtr<UserType>,
-            cpp_size,
-            "SampleAllocateePtr<UserType>"
-        );
+        verify_size_and_align!(SampleAllocateePtr<UserType>, cpp_size, "SampleAllocateePtr<UserType>");
     }
 
     #[test]
     fn test_event_data_control_composite_size() {
         let cpp_size = SampleAllocateePtrLola::get_event_data_control_composite_size();
-        verify_size_and_align!(
-            EventDataControlComposite,
-            cpp_size,
-            "EventDataControlComposite"
-        );
+        verify_size_and_align!(EventDataControlComposite, cpp_size, "EventDataControlComposite");
     }
 
     #[test]
@@ -164,10 +170,7 @@ mod tests {
     fn test_negative_allocatee_ptr_size_mismatch() {
         let cpp_size = SampleAllocateePtrLola::get_variant_int32();
         let incorrect = cpp_size.size + 1;
-        assert_eq!(
-            incorrect, cpp_size.size,
-            "SampleAllocateePtr size mismatch!"
-        );
+        assert_eq!(incorrect, cpp_size.size, "SampleAllocateePtr size mismatch!");
     }
 
     #[test]
@@ -175,9 +178,6 @@ mod tests {
     fn test_negative_allocatee_ptr_align_mismatch() {
         let cpp_size = SampleAllocateePtrLola::get_variant_int32();
         let incorrect = cpp_size.align + 1;
-        assert_eq!(
-            incorrect, cpp_size.align,
-            "SampleAllocateePtr align mismatch!"
-        );
+        assert_eq!(incorrect, cpp_size.align, "SampleAllocateePtr align mismatch!");
     }
 }

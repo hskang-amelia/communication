@@ -23,6 +23,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // LogContext BCLI -> BenchmarkClient ;)
@@ -61,7 +62,7 @@ class ServiceFinder
 
   public:
     ServiceFinder(ServiceFinderMode service_finder_mode, score::cpp::stop_token stop_token)
-        : service_finder_mode_{service_finder_mode}, stop_token_{stop_token}
+        : service_finder_mode_{service_finder_mode}, stop_token_{std::move(stop_token)}
     {
     }
 
@@ -144,7 +145,7 @@ class RunDurationHandler
     std::chrono::time_point<std::chrono::high_resolution_clock> start_;
 
   public:
-    RunDurationHandler(const ClientConfig& cc) : run_time_limit_(cc.run_time_limit)
+    explicit RunDurationHandler(const ClientConfig& cc) : run_time_limit_(cc.run_time_limit)
     {
         start_ = std::chrono::high_resolution_clock::now();
     }
@@ -324,7 +325,7 @@ bool RunClient(const ClientConfig& config, score::cpp::stop_token test_stop_toke
     {
         return false;
     }
-    auto proxy_handle = handle_opt.value();
+    const auto& proxy_handle = handle_opt.value();
 
     auto lola_proxy_result = TestDataProxy::Create(proxy_handle);
 
@@ -379,7 +380,7 @@ int main(int argc, const char** argv)
         score::mw::log::LogError(kLogContext) << "Could not read command line arguments.";
         return EXIT_FAILURE;
     }
-    auto args = args_result.value();
+    const auto& args = args_result.value();
 
     score::cpp::stop_source test_stop_source{};
 
@@ -400,7 +401,7 @@ int main(int argc, const char** argv)
     {
         // fuzz the creation time of the proxies
         std::this_thread::sleep_for(std::chrono::milliseconds{std::rand() % 100});
-        workers.push_back(std::thread([&config, &exit_code, &test_stop_token]() noexcept {
+        workers.emplace_back([&config, &exit_code, &test_stop_token]() noexcept {
             auto success = score::mw::com::test::RunClient(config, test_stop_token);
 
             success &= score::mw::com::test::signal_service_that_client_is_done();
@@ -409,7 +410,7 @@ int main(int argc, const char** argv)
             {
                 exit_code = EXIT_FAILURE;
             }
-        }));
+        });
     }
     std::for_each(workers.begin(), workers.end(), [](std::thread& t) {
         t.join();

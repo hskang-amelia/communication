@@ -25,7 +25,7 @@ TrackerGuardFactory makeTrakerGuardFactory(SampleReferenceTracker& tracker,
                                            const std::size_t num_available_guards) noexcept
 {
     // NOLINTNEXTLINE(score-no-unnamed-temporary-objects): By returning the unnammed object, we allow for copy-elision.
-    return TrackerGuardFactory(tracker, num_available_guards);
+    return {tracker, num_available_guards};
 }
 
 void deallocateSampleReferenceTracker(SampleReferenceTracker& instance,
@@ -181,7 +181,7 @@ void SampleReferenceTracker::Deallocate(const std::size_t num_deallocations) noe
 {
     // fetch_add  doesn't return error.
     score::cpp::ignore = available_samples_.fetch_add(num_deallocations, std::memory_order_relaxed);
-    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(  // COV_JUSTIFIED sample-reference-tracker-available-samples-assert
         available_samples_.load() <= max_num_samples_,
         "Available samples is larger than the maximum allowed number of samples.");
 }

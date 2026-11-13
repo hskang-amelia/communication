@@ -14,8 +14,7 @@
 
 #include "score/filesystem/path.h"
 #include "score/mw/log/logging.h"
-
-#include <score/span.hpp>
+#include "score/string_manipulation/arguments/arguments.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -42,26 +41,7 @@ RuntimeConfiguration::RuntimeConfiguration(filesystem::Path configuration_path)
 {
 }
 
-// NOLINTNEXTLINE(modernize-avoid-c-arrays):C-style array tolerated for command line arguments
-RuntimeConfiguration::RuntimeConfiguration(const std::int32_t argc, const char* argv[]) : configuration_path_{}
-{
-    // We convert the const char* arguments into safecpp::zstring_views to ensure that they are null-terminated and safe
-    // to use.
-    // This is a deprecated API for a reason! If the given argv[] is not null-terminated, it can lead to undefined
-    // behavior. But this isn't introduced newly by this conversion!
-    std::vector<safecpp::zstring_view> command_line_arguments{};
-    for (std::int32_t arg_idx = 0U; arg_idx < argc; arg_idx++)
-    {
-        auto argument = std::string_view{argv[arg_idx]};
-        command_line_arguments.push_back(safecpp::zstring_view{argument.data(), argument.size()});
-    }
-
-    auto configuration_path = ParseConfigurationPath(command_line_arguments);
-    configuration_path_ =
-        configuration_path.has_value() ? std::move(configuration_path).value() : kDefaultConfigurationPath;
-}
-
-RuntimeConfiguration::RuntimeConfiguration(cpp::span<safecpp::zstring_view> command_line_arguments)
+RuntimeConfiguration::RuntimeConfiguration(cpp::span<const safecpp::zstring_view> command_line_arguments)
 {
     auto configuration_path = ParseConfigurationPath(command_line_arguments);
     configuration_path_ =
@@ -74,7 +54,7 @@ const filesystem::Path& RuntimeConfiguration::GetConfigurationPath() const&
 }
 
 std::optional<filesystem::Path> RuntimeConfiguration::ParseConfigurationPath(
-    const score::cpp::span<safecpp::zstring_view> command_line_args)
+    const score::cpp::span<const safecpp::zstring_view> command_line_args)
 {
     const auto num_args = command_line_args.size();
 

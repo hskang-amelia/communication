@@ -12,7 +12,6 @@
  ********************************************************************************/
 #include "score/mw/com/impl/bindings/lola/tracing/tracing_runtime.h"
 #include "score/analysis/tracing/common/interface_types/types.h"
-#include "score/language/safecpp/safe_math/safe_math.h"
 #include "score/language/safecpp/scoped_function/scope.h"
 #include "score/mw/com/impl/tracing/service_element_tracing_data.h"
 #include "score/mw/log/logging.h"
@@ -96,12 +95,7 @@ bool TracingRuntime::RegisterWithGenericTraceApi() noexcept
     trace_client_id_ = *register_client_result;
 
     analysis::tracing::TraceDoneCallBackType trace_done_callback{
-        receive_handler_scope_,
-        // Suppress "AUTOSAR C++14 M3-2-3" rule finding. This rule states: "A type, object or function that is used in
-        // multiple translation units shall be declared in one and only one file.".
-        // This is false positive. Function is declared only once.
-        // coverity[autosar_cpp14_m3_2_3_violation : FALSE]
-        [this](analysis::tracing::TraceContextId trace_context_id) noexcept {
+        receive_handler_scope_, [this](analysis::tracing::TraceContextId trace_context_id) noexcept {
             if (!IsTracingSlotUsed(trace_context_id))
             {
                 score::mw::log::LogWarn("lola")
@@ -370,6 +364,7 @@ auto TracingRuntime::GetTraceContextIdRangeForServiceElement(
     // LCOV_EXCL_START (We don't have the infrastructure to test the failure case of this static assert at compile time.
     // This check is anyway defensive programming to prevent accidental changes that could be made to the code in
     // the future but currently has no way of failing in production.
+    // Deviation of MISRA RULE-7-0-5: codeql::misra_deviation_next_line(compile-time-static-assert-limit-check)
     static_assert(
         ((std::numeric_limits<decltype(range_start)>::max() + std::numeric_limits<decltype(range_size)>::max()) <=
          std::numeric_limits<TraceContextId>::max()),
@@ -402,7 +397,7 @@ auto TracingRuntime::GetTraceContextId(
 // implicitly". std::terminate() is implicitly called from '.value()' in case it doesn't have value but as we check
 // before with 'has_value()' so no way for throwing std::bad_optional_access which leds to std::terminate().
 // coverity[autosar_cpp14_a15_5_3_violation : FALSE]
-TracingRuntime::EmplaceTypeErasedSamplePtr(impl::tracing::TypeErasedSamplePtr type_erased_sample_ptr,
+TracingRuntime::EmplaceTypeErasedSamplePtr(impl::SamplePtr<void> type_erased_sample_ptr,
                                            const impl::tracing::ServiceElementTracingData service_element_tracing_data)
 {
     if (service_element_tracing_data.service_element_range_start >=

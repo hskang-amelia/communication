@@ -1,4 +1,4 @@
-/********************************************************************************
+/*******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 /// Both `Debug` and `ScoreDebug` are derived because `score_log` macros require `ScoreDebug`,
 /// while `Debug` is needed for standard Rust formatting. There is currently no blanket
@@ -23,7 +23,9 @@ use thiserror::Error;
 /// including specific issues with service interfaces, instance specifiers, and handle retrieval.
 #[derive(Debug, ScoreDebug, Error)]
 pub enum ServiceFailedReason {
-    #[error("Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content")]
+    #[error(
+        "Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content"
+    )]
     InstanceSpecifierInvalid,
     #[error("Service not found, which may not be available currently or accessible")]
     ServiceNotFound,
@@ -36,7 +38,9 @@ pub enum ServiceFailedReason {
 /// Reason for producer failure
 #[derive(Debug, ScoreDebug, Error)]
 pub enum ProducerFailedReason {
-    #[error("Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content")]
+    #[error(
+        "Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content"
+    )]
     InstanceSpecifierInvalid,
     #[error("Skeleton creation failed")]
     SkeletonCreationFailed,
@@ -47,7 +51,9 @@ pub enum ProducerFailedReason {
 /// Reason for consumer failure
 #[derive(Debug, ScoreDebug, Error)]
 pub enum ConsumerFailedReason {
-    #[error("Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content")]
+    #[error(
+        "Invalid instance specifier format or content, which may not be according to the expected format or contain invalid content"
+    )]
     InstanceSpecifierInvalid,
     #[error("Service not found from service discovery handle")]
     ServiceHandleNotFound,
@@ -58,9 +64,7 @@ pub enum ConsumerFailedReason {
 /// Memory allocation error details
 #[derive(Debug, ScoreDebug, Error)]
 pub enum AllocationFailureReason {
-    #[error(
-        "Requested size exceeds available memory which is configured during subscription setup"
-    )]
+    #[error("Requested size exceeds available memory which is configured during subscription setup")]
     OutOfMemory,
     #[error("Invalid allocation request")]
     InvalidRequest,
@@ -120,7 +124,9 @@ pub enum EventFailedReason {
     SendingDataFailed,
     #[error("Event not available for subscription, possibly due to missing event type or incompatible service")]
     EventNotAvailable,
-    #[error("Failed to subscribe to event, due to the max_samples parameter being invalid (e.g., zero or exceeding allowed limits)")]
+    #[error(
+        "Failed to subscribe to event, due to the max_samples parameter being invalid (e.g., zero or exceeding allowed limits)"
+    )]
     InvalidMaxSamples,
     #[error("Sample count out of bounds, expected at most {max}, but got {requested}")]
     MaxSampleOutOfBounds { max: usize, requested: usize },

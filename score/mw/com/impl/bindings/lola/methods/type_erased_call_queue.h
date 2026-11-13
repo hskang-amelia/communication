@@ -39,7 +39,7 @@ class TypeErasedCallQueue final
         std::size_t queue_size;
     };
 
-    TypeErasedCallQueue(memory::shared::ManagedMemoryResource& resource,
+    TypeErasedCallQueue(memory::shared::ManagedMemoryResource& memory_resource,
                         const TypeErasedElementInfo& type_erased_element_info);
 
     ~TypeErasedCallQueue() noexcept;
@@ -54,6 +54,7 @@ class TypeErasedCallQueue final
     std::optional<score::cpp::span<std::byte>> GetReturnValueQueueStorage() const;
 
     auto GetTypeErasedElementInfo() const& -> const TypeErasedElementInfo&;
+    auto GetTypeErasedElementInfo() const&& -> const TypeErasedElementInfo&& = delete;
 
   private:
     struct OffsetPtrSpan

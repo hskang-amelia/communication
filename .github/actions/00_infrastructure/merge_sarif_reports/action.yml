@@ -44,8 +44,13 @@ runs:
     - name: Merge SARIF reports
       id: merge
       shell: bash
-      run: |
+      run: |-
         set -euo pipefail
+
+        if [[ ! -s "${{ inputs.bep-json }}" ]]; then
+          echo "::error::Build event file '${{ inputs.bep-json }}' is missing or empty; the lint build did not run."
+          exit 1
+        fi
 
         WORK_DIR="$(mktemp -d)"
         STAGE_DIR="${WORK_DIR}/reports"

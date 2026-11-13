@@ -124,7 +124,7 @@ score::mw::log::LogHex64 PointerToLogValue(const void* const pointer)
 
 std::ptrdiff_t SubtractPointersBytes(const void* const first, const void* const second)
 {
-    static_assert(sizeof(std::ptrdiff_t) == sizeof(std::uintptr_t), "");
+    static_assert(sizeof(std::ptrdiff_t) == sizeof(std::uintptr_t));
 
     const auto first_address_as_integer = CastPointerToInteger(first);
     const auto second_address_as_integer = CastPointerToInteger(second);
@@ -140,7 +140,10 @@ std::ptrdiff_t SubtractPointersBytes(const void* const first, const void* const 
             score::mw::log::LogFatal("shm")
                 << "Could not subtract " << second_address_as_integer << "from" << first_address_as_integer
                 << ". Result does not fit into std::ptrdiff_t. Terminating.";
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(false);
+            // Reachable in principle, but must not be reached in production: Two addresses further apart than
+            // std::ptrdiff_t max are possible in principle. Shared memory regions are far smaller, so such a pair of
+            // addresses must not occur in production.
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE();
         }
         return static_cast<std::ptrdiff_t>(result_as_integer);
     }
@@ -162,7 +165,10 @@ std::ptrdiff_t SubtractPointersBytes(const void* const first, const void* const 
         score::mw::log::LogFatal("shm") << "Could not subtract " << second_address_as_integer << "from"
                                         << first_address_as_integer
                                         << ". Result does not fit into std::ptrdiff_t. Terminating.";
-        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(false);
+        // Reachable in principle, but must not be reached in production: Two addresses further apart than
+        // std::ptrdiff_t max are possible in principle. Shared memory regions are far smaller, so such a pair of
+        // addresses must not occur in production.
+        SCORE_LANGUAGE_FUTURECPP_UNREACHABLE();
     }
     return -1 * static_cast<std::ptrdiff_t>(absolute_value_result_as_integer);
 }

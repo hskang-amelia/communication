@@ -93,14 +93,14 @@ constexpr std::uint8_t kFakeNumberOfIpcTracingSlotsPerServiceElement{7U};
 constexpr auto kNumberOfTotalConfiguredTracingSlots{kNumberOfTracingServiceElements *
                                                     kFakeNumberOfIpcTracingSlotsPerServiceElement};
 
-impl::tracing::TypeErasedSamplePtr CreateMockTypeErasedSamplePtr()
+impl::SamplePtr<void> CreateMockTypeErasedSamplePtr()
 {
-    mock_binding::SamplePtr<TestSampleType> mock_binding_sample_ptr = std::make_unique<TestSampleType>(42U);
-    impl::SamplePtr<TestSampleType> dummy_sample_ptr{std::move(mock_binding_sample_ptr), SampleReferenceGuard{}};
-    impl::tracing::TypeErasedSamplePtr dummy_type_erased_sample_ptr{std::move(dummy_sample_ptr)};
-    return dummy_type_erased_sample_ptr;
+    mock_binding::SamplePtr mock_binding_sample_ptr{new TestSampleType(42U), [](void* p) noexcept {
+                                                        delete static_cast<TestSampleType*>(p);
+                                                    }};
+    return impl::SamplePtr<void>{std::move(mock_binding_sample_ptr), SampleReferenceGuard{}};
 }
-impl::tracing::TypeErasedSamplePtr kDummyTypeErasedSamplePtr{CreateMockTypeErasedSamplePtr()};
+impl::SamplePtr<void> kDummyTypeErasedSamplePtr{CreateMockTypeErasedSamplePtr()};
 
 class TracingRuntimeFixture : public ::testing::Test
 {
@@ -368,9 +368,10 @@ TEST_F(TracingRuntimeTypeErasedSamplePtrFixture, EmplacingTypeErasedSamplePtrDoe
     };
 
     bool was_destructed{false};
-    mock_binding::SamplePtr<DestructorTracer> pointer = std::make_unique<DestructorTracer>(was_destructed);
-    impl::SamplePtr<DestructorTracer> sample_ptr{std::move(pointer), SampleReferenceGuard{}};
-    impl::tracing::TypeErasedSamplePtr type_erased_sample_ptr{std::move(sample_ptr)};
+    mock_binding::SamplePtr pointer{new DestructorTracer(was_destructed), [](void* p) noexcept {
+                                        delete static_cast<DestructorTracer*>(p);
+                                    }};
+    impl::SamplePtr<void> type_erased_sample_ptr{std::move(pointer), SampleReferenceGuard{}};
 
     // Given a TracingRuntimeObject
 
@@ -424,7 +425,7 @@ TEST_F(TracingRuntimeTypeErasedSamplePtrFixture, ClearTypeErasedSamplePtrSetsSlo
         tracing_runtime_.RegisterServiceElement(kFakeNumberOfIpcTracingSlotsPerServiceElement);
 
     // and given that 2 type erased sample ptr have been successfully emplaced
-    impl::tracing::TypeErasedSamplePtr dummy_type_erased_sample_ptr_2{CreateMockTypeErasedSamplePtr()};
+    impl::SamplePtr<void> dummy_type_erased_sample_ptr_2{CreateMockTypeErasedSamplePtr()};
     const auto trace_context_id_1 =
         tracing_runtime_.EmplaceTypeErasedSamplePtr(std::move(kDummyTypeErasedSamplePtr), service_element_tracing_data)
             .value();
@@ -451,7 +452,7 @@ TEST_F(TracingRuntimeTypeErasedSamplePtrFixture,
         tracing_runtime_.RegisterServiceElement(kFakeNumberOfIpcTracingSlotsPerServiceElement);
 
     // and given that 2 type erased sample ptr have been successfully emplaced
-    impl::tracing::TypeErasedSamplePtr dummy_type_erased_sample_ptr_2{CreateMockTypeErasedSamplePtr()};
+    impl::SamplePtr<void> dummy_type_erased_sample_ptr_2{CreateMockTypeErasedSamplePtr()};
     const auto trace_context_id_1 =
         tracing_runtime_.EmplaceTypeErasedSamplePtr(std::move(kDummyTypeErasedSamplePtr), service_element_tracing_data)
             .value();
@@ -858,10 +859,11 @@ TEST_F(TraceDoneCallbackFixture, ServiceElementTracingIsInactiveAfterCallingTrac
     RecordProperty("TestType", "Requirements-based test");
     RecordProperty("DerivationTechnique", "Analysis of requirements");
 
-    mock_binding::SamplePtr<TestSampleType> mock_binding_sample_pointer_1 = std::make_unique<TestSampleType>(24U);
-    impl::SamplePtr<TestSampleType> dummy_sample_pointer_1{std::move(mock_binding_sample_pointer_1),
-                                                           SampleReferenceGuard{}};
-    impl::tracing::TypeErasedSamplePtr dummy_type_erased_sample_pointer_1{std::move(dummy_sample_pointer_1)};
+    mock_binding::SamplePtr mock_binding_sample_pointer_1{new TestSampleType(24U), [](void* p) noexcept {
+                                                              delete static_cast<TestSampleType*>(p);
+                                                          }};
+    impl::SamplePtr<void> dummy_type_erased_sample_pointer_1{std::move(mock_binding_sample_pointer_1),
+                                                             SampleReferenceGuard{}};
 
     // Given a TracingRuntimeObject
 

@@ -1,15 +1,15 @@
-/********************************************************************************
- * Copyright (c) 2025 Contributors to the Eclipse Foundation
+/*******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 //! This crate provides a mock implementation of the COM API for testing purposes.
 //! It is meant to be used in conjunction with the `com-api` crate.
@@ -93,10 +93,7 @@ impl Runtime for MockRuntimeImpl {
         }
     }
 
-    fn producer_builder<I: Interface>(
-        &self,
-        instance_specifier: InstanceSpecifier,
-    ) -> Self::ProducerBuilder<I> {
+    fn producer_builder<I: Interface>(&self, instance_specifier: InstanceSpecifier) -> Self::ProducerBuilder<I> {
         MockProducerBuilder::new(self, instance_specifier)
     }
 }
@@ -426,9 +423,7 @@ where
     }
 
     #[allow(clippy::manual_async_fn)]
-    fn get_available_instances_async(
-        &self,
-    ) -> impl Future<Output = Result<Self::ServiceEnumerator>> + Send {
+    fn get_available_instances_async(&self) -> impl Future<Output = Result<Self::ServiceEnumerator>> + Send {
         async { Ok(Vec::new()) }
     }
 }
@@ -476,8 +471,9 @@ pub struct MockConsumerBuilder<I: Interface> {
 }
 
 impl<I: Interface> ConsumerDescriptor<MockRuntimeImpl> for MockConsumerBuilder<I> {
-    fn get_instance_identifier(&self) -> &InstanceSpecifier {
-        todo!()
+    fn get_instance_specifier(&self) -> &InstanceSpecifier {
+        // For the mock runtime, simply return the stored instance specifier.
+        &self.instance_specifier
     }
 }
 
@@ -840,12 +836,8 @@ mod test {
             match receive_result {
                 Ok(0) => panic!("No sample received"),
                 Ok(x) => {
-                    println!(
-                        "{} samples received: sample[0] = {}",
-                        x,
-                        *sample_buf.front().unwrap()
-                    )
-                }
+                    println!("{} samples received: sample[0] = {}", x, *sample_buf.front().unwrap())
+                },
                 Err(e) => panic!("{:?}", e),
             }
         }
@@ -859,7 +851,7 @@ mod test {
             let sample_buf = SampleContainer::new(1);
             let (_returned_buf, result) = test_subscriber.receive(sample_buf, 1, 1).await;
             match result {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(e) => panic!("{:?}", e),
             }
         })

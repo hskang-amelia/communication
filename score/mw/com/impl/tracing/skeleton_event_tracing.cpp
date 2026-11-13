@@ -88,7 +88,7 @@ std::uint8_t GetNumberOfTracingSlots(const InstanceIdentifier& instance_identifi
         std::terminate();
     }();
 
-    const auto& service_instance_map = [&lola_service_instance_deployment]() constexpr {
+    const auto& service_instance_map = [&lola_service_instance_deployment]() {
         // Deviation from equivalent Rules A7-1-8 and  M6-4-1:
         // - A non-type specifier shall be placed before a type specifier in a declaration.
         // - An if ( condition ) construct shall be followed by a compound statement.
@@ -110,7 +110,10 @@ std::uint8_t GetNumberOfTracingSlots(const InstanceIdentifier& instance_identifi
         // EVENT or FIELD (we have a static_assert at the start of this function).
         else
         {
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(0);
+            // Reachable in principle, but must not be reached in production: The else branch is compiled out for every
+            // valid service_element_type (static_assert at the start of the function). It can only be reached by an
+            // invalid template argument, which must not be used in production.
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE();
         }
     }();
 
@@ -174,52 +177,22 @@ TracingData ExtractBindingTracingData(const impl::SampleAllocateePtr<void>& samp
         // Here we can't use a raw pointer / reference since we're using score::cpp::overload, and the function is not
         // replaceing the managed object, so this should be a const reference.
         // coverity[autosar_cpp14_a8_4_12_violation]
+        // Tracing is not supported on SomeIP
+        [](const someip::SampleAllocateePtr&) -> TracingData {
+            std::terminate();
+        },
+        // Suppress "AUTOSAR C++14 A8-4-12" rule finding. This rule states: "A std::unique_ptr shall be passed to a
+        // function as: (1) a copy to express the function assumes ownership (2) an lvalue reference to express that
+        // the function replaces the managed object".
+        // Here we can't use a raw pointer / reference since we're using score::cpp::overload, and the function is not
+        // replaceing the managed object, so this should be a const reference.
+        // coverity[autosar_cpp14_a8_4_12_violation]
         [&sample_type_size_info](const mock_binding::SampleAllocateePtr& ptr) -> TracingData {
             return {0U, {ptr.get(), sample_type_size_info.Size()}};
         },
         [](const score::cpp::blank&) -> TracingData {
             std::terminate();
         });
-    return std::visit(visitor, binding_ptr_variant);
-}
-
-// Suppress "AUTOSAR C++14 A15-5-3" rule finding. This rule states: "The std::terminate() function shall
-// not be called implicitly.". std::visit Throws std::bad_variant_access if
-// as-variant(vars_i).valueless_by_exception() is true for any variant vars_i in vars. The variant may only become
-// valueless if an exception is thrown during different stages. Since we don't throw exceptions, it's not possible
-// that the variant can return true from valueless_by_exception and therefore not possible that std::visit throws
-// an exception.
-// This suppression should be removed after fixing [Ticket-173043](broken_link_j/Ticket-173043)
-// coverity[autosar_cpp14_a15_5_3_violation : FALSE]
-TypeErasedSamplePtr CreateTypeErasedSamplePtr(impl::SampleAllocateePtr<void>& sample_data_ptr)
-{
-    auto& binding_ptr_variant = SampleAllocateePtrMutableView{sample_data_ptr}.GetUnderlyingVariant();
-    auto visitor = score::cpp::overload(
-        [](lola::SampleAllocateePtr& lola_ptr) -> TypeErasedSamplePtr {
-            lola::ConsumerEventDataControlLocalView<>& consumer_event_data_control_local =
-                lola::SampleAllocateePtrMutableView{lola_ptr}.GetConsumerEventDataControlLocalView();
-
-            const auto event_slot_index = lola_ptr.GetReferencedSlot();
-            consumer_event_data_control_local.ReferenceSpecificEvent(event_slot_index);
-            const auto* const managed_object =
-                static_cast<const void*>(lola::SampleAllocateePtrView{lola_ptr}.GetManagedObject());
-
-            lola::SamplePtr<void> sample_ptr{managed_object, consumer_event_data_control_local, event_slot_index};
-            return impl::tracing::TypeErasedSamplePtr{std::move(sample_ptr)};
-        },
-        [](mock_binding::SampleAllocateePtr& ptr) -> TypeErasedSamplePtr {
-            impl::tracing::TypeErasedSamplePtr type_erased_sample_ptr{
-                mock_binding::SamplePtr<void>{ptr.get(), [](void*) noexcept {}}};
-            return type_erased_sample_ptr;
-        },
-        // LCOV_EXCL_START (Defensive programming: CreateTypeErasedSamplePtr is always called after
-        // ExtractBindingTracingData. If the SampleAllocateePtr contains a blank binding, then ExtractBindingTracingData
-        // will terminate. Therefore, we will never reach this branch.
-        [](score::cpp::blank&) -> TypeErasedSamplePtr {
-            std::terminate();
-        });
-    // LCOV_EXCL_STOP
-
     return std::visit(visitor, binding_ptr_variant);
 }
 
@@ -332,9 +305,9 @@ SkeletonEventTracingData GenerateSkeletonTracingStructFromFieldConfig(const Inst
 auto CreateTracingSendCallback(SkeletonEventTracingData& skeleton_event_tracing_data,
                                memory::DataTypeSizeInfo skeleton_event_size_info,
                                const SkeletonEventBinding& skeleton_event_binding)
-    -> std::optional<typename SkeletonEventBinding::SendTraceCallback>
+    -> std::optional<SkeletonEventBinding::SendTraceCallback>
 {
-    std::optional<typename SkeletonEventBinding::SendTraceCallback> tracing_handler{};
+    std::optional<SkeletonEventBinding::SendTraceCallback> tracing_handler{};
     if (skeleton_event_tracing_data.enable_send)
     {
         tracing_handler = [&skeleton_event_tracing_data, skeleton_event_size_info, &skeleton_event_binding](
@@ -348,9 +321,9 @@ auto CreateTracingSendCallback(SkeletonEventTracingData& skeleton_event_tracing_
 auto CreateTracingSendWithAllocateCallback(SkeletonEventTracingData& skeleton_event_tracing_data,
                                            memory::DataTypeSizeInfo skeleton_event_size_info,
                                            const SkeletonEventBinding& skeleton_event_binding)
-    -> std::optional<typename SkeletonEventBinding::SendTraceCallback>
+    -> std::optional<SkeletonEventBinding::SendTraceCallback>
 {
-    std::optional<typename SkeletonEventBinding::SendTraceCallback> tracing_handler{};
+    std::optional<SkeletonEventBinding::SendTraceCallback> tracing_handler{};
     if (skeleton_event_tracing_data.enable_send_with_allocate)
     {
         tracing_handler = [&skeleton_event_tracing_data, skeleton_event_size_info, &skeleton_event_binding](
@@ -384,14 +357,16 @@ void TraceSend(SkeletonEventTracingData& skeleton_event_tracing_data,
         }
         else
         {
+            // Reachable in principle, but must not be reached in production: Other ServiceElementType values exist, but
+            // skeleton events and fields are the only callers. Callers must pass EVENT or FIELD in production.
             // Suppress "AUTOSAR C++14 M0-1-1", The rule states: "A project shall not contain unreachable code"
             // This is false positive, the enum has more fields than EVENT and FIELD so we might reach this branch.
             // coverity[autosar_cpp14_m0_1_1_violation : FALSE]
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(false, "Service element type must be EVENT or FIELD");
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE_MESSAGE("Service element type must be EVENT or FIELD");
         }
 
         const auto tracing_data = ExtractBindingTracingData(sample_data_ptr, skeleton_event_size_info);
-        auto type_erased_sample_ptr = CreateTypeErasedSamplePtr(sample_data_ptr);
+        auto type_erased_sample_ptr = CreateSamplePtrFromSampleAllocateePtr(sample_data_ptr);
 
         const auto binding_type = skeleton_event_binding_base.GetBindingType();
         const auto service_element_tracing_data = skeleton_event_tracing_data.service_element_tracing_data;
@@ -429,14 +404,16 @@ void TraceSendWithAllocate(SkeletonEventTracingData& skeleton_event_tracing_data
         }
         else
         {
+            // Reachable in principle, but must not be reached in production: Other ServiceElementType values exist, but
+            // skeleton events and fields are the only callers. Callers must pass EVENT or FIELD in production.
             // Suppress "AUTOSAR C++14 M0-1-1", The rule states: "A project shall not contain unreachable code"
             // This is false positive, the enum has more fields than EVENT and FIELD so we might reach this branch.
             // coverity[autosar_cpp14_m0_1_1_violation : FALSE]
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(false, "Service element type must be EVENT or FIELD");
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE_MESSAGE("Service element type must be EVENT or FIELD");
         }
 
         const auto tracing_data = ExtractBindingTracingData(sample_data_ptr, skeleton_event_size_info);
-        auto type_erased_sample_ptr = CreateTypeErasedSamplePtr(sample_data_ptr);
+        auto type_erased_sample_ptr = CreateSamplePtrFromSampleAllocateePtr(sample_data_ptr);
 
         const auto binding_type = skeleton_event_binding_base.GetBindingType();
         const auto service_element_tracing_data = skeleton_event_tracing_data.service_element_tracing_data;

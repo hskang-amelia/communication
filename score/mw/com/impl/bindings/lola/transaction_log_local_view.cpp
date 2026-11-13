@@ -12,6 +12,7 @@
  ********************************************************************************/
 #include "score/mw/com/impl/bindings/lola/transaction_log_local_view.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <thread>
@@ -31,9 +32,9 @@ namespace
 // This allows Thread A to complete its dereference transaction before proceeding.
 void WaitForTransactionEndToBecomeFalse(TransactionLogSlot& slot) noexcept
 {
-    constexpr std::uint8_t kRetryCount = 10U;
+    constexpr std::uint32_t kRetryCount = 10U;
     constexpr std::chrono::milliseconds kRetryInterval(10);
-    for (std::uint8_t retry = 0U; retry < kRetryCount; ++retry)
+    for (std::uint32_t retry = 0U; retry < kRetryCount; ++retry)
     {
         if (!slot.GetTransactionEnd())
         {
@@ -42,22 +43,17 @@ void WaitForTransactionEndToBecomeFalse(TransactionLogSlot& slot) noexcept
         std::this_thread::sleep_for(kRetryInterval);
     }
     score::mw::log::LogFatal("lola") << "ReferenceTransactionBegin: Transaction-END bit remains TRUE after "
-                                     << kRetryCount * kRetryInterval.count() << "ms; terminating";
+                                     << static_cast<std::int64_t>(kRetryCount) * kRetryInterval.count()
+                                     << "ms; terminating";
     std::terminate();
 }
 
 bool DoesLogContainIncrementOrDecrementTransactions(
     const TransactionLogLocalView::TransactionLogSlotsLocalView& reference_count_slots) noexcept
 {
-    for (std::size_t slot_idx = 0U; slot_idx < reference_count_slots.size(); ++slot_idx)
-    {
-        const auto& slot = reference_count_slots[slot_idx];
-        if (slot.GetTransactionBegin() || slot.GetTransactionEnd())
-        {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(reference_count_slots.begin(), reference_count_slots.end(), [](const auto& slot) {
+        return slot.GetTransactionBegin() || slot.GetTransactionEnd();
+    });
 }
 
 }  // namespace
@@ -179,8 +175,10 @@ Result<void> TransactionLogLocalView::RollbackProxyElementLog(const DereferenceS
                                          !subscribe_transactions_.get().GetTransactionEnd()};
     if (was_no_subscribe_recorded)
     {
+        [[maybe_unused]] const bool contains_increment_or_decrement_transactions{
+            DoesLogContainIncrementOrDecrementTransactions(reference_count_slots_local_)};
         SCORE_LANGUAGE_FUTURECPP_PRECONDITION_MESSAGE(
-            !DoesLogContainIncrementOrDecrementTransactions(reference_count_slots_local_),
+            !contains_increment_or_decrement_transactions,
             "All slot increment transactions should be reversed before calling unsubscribe");
     }
 

@@ -1,15 +1,15 @@
-/********************************************************************************
- * Copyright (c) 2025 Contributors to the Eclipse Foundation
+/*******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 //! The **COM API** is a Rust API for service-oriented inter-process communication (IPC) in the `mw::com` ecosystem.
 //!
@@ -153,5 +153,5 @@ pub use score_com_concept::{
 };
 
 #[doc(hidden)]
-// See eclipse-score/communication/issues/173 - `paste`crate is still in discussion regarding rust safety certification.
-pub use score_com_concept::paste;
+// See eclipse-score/communication/issues/173 - `pastey` replaces `paste` for identifier concatenation in the interface macros.
+pub use score_com_concept::pastey;

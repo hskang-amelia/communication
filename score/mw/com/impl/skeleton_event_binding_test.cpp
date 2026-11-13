@@ -17,7 +17,6 @@
 #include "score/mw/com/impl/sample_allocatee_guard.h"
 
 #include <gtest/gtest.h>
-#include <memory>
 #include <type_traits>
 
 namespace score::mw::com::impl
@@ -33,8 +32,7 @@ class MyEvent final : public SkeletonEventBinding
         return {};
     }
     void PrepareStopOffer() noexcept override {}
-    Result<void> Send(SampleAllocateePtr<void>,
-                      std::optional<SkeletonEventBinding::SendTraceCallback>) noexcept override
+    Result<void> Send(SampleAllocateePtr<void>, const std::optional<SkeletonEventBinding::SendTraceCallback>&) override
     {
         return {};
     }
@@ -45,7 +43,7 @@ class MyEvent final : public SkeletonEventBinding
     }
     Result<SamplePtr<void>> GetLatestSample(QualityType) override
     {
-        return SamplePtr<void>{mock_binding::SamplePtr<void>{&test_sample_buffer_, [](void*) noexcept {}},
+        return SamplePtr<void>{mock_binding::SamplePtr{&test_sample_buffer_, [](void*) noexcept {}},
                                SampleReferenceGuard{}};
     }
     BindingType GetBindingType() const noexcept override
@@ -56,19 +54,6 @@ class MyEvent final : public SkeletonEventBinding
     memory::DataTypeSizeInfo GetEventDataTypeSizeInfo() const noexcept override
     {
         return sample_data_type_size_info;
-    }
-    Result<void> Notify() noexcept override
-    {
-        return {};
-    }
-    Result<void> SetReceiveHandlerRegistrationChangedHandler(
-        ReceiveHandlerRegistrationChangedCallback) noexcept override
-    {
-        return {};
-    }
-    Result<void> UnsetReceiveHandlerRegistrationChangedHandler() noexcept override
-    {
-        return {};
     }
 
   private:

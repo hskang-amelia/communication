@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,7 +40,7 @@ namespace score::mw::com::impl
 namespace
 {
 
-void StopOfferServiceInServiceDiscovery(const InstanceIdentifier& instance_identifier) noexcept
+void StopOfferServiceInServiceDiscovery(const InstanceIdentifier& instance_identifier)
 {
     const auto result = Runtime::getInstance().GetServiceDiscovery().StopOfferService(instance_identifier);
     if (!result.has_value())
@@ -115,7 +116,7 @@ score::Result<std::vector<utils::ScopeExit<>>> SkeletonBase::OfferServiceEvents(
                 << ": Reason:" << offer_result.error().Message() << ": " << offer_result.error().UserMessage();
             return MakeUnexpected(ComErrc::kBindingFailure);
         }
-        offer_guards.emplace_back([&skeleton_event]() {
+        std::ignore = offer_guards.emplace_back([&skeleton_event]() {
             skeleton_event.PrepareStopOffer();
         });
     }
@@ -141,7 +142,7 @@ score::Result<std::vector<utils::ScopeExit<>>> SkeletonBase::OfferServiceFields(
             }
             return MakeUnexpected(ComErrc::kBindingFailure);
         }
-        offer_guards.emplace_back([&skeleton_field]() {
+        std::ignore = offer_guards.emplace_back([&skeleton_field]() {
             skeleton_field.PrepareStopOffer();
         });
     }
@@ -150,6 +151,12 @@ score::Result<std::vector<utils::ScopeExit<>>> SkeletonBase::OfferServiceFields(
 
 auto SkeletonBase::OfferService() -> Result<void>
 {
+    if (service_offered_flag_.IsSet())
+    {
+        score::mw::log::LogInfo("lola") << "SkeletonBinding::OfferService called, but service is already offered.";
+        return {};
+    }
+
     if (skeleton_mock_ != nullptr)
     {
         return skeleton_mock_->OfferService();
@@ -220,7 +227,7 @@ auto SkeletonBase::OfferService() -> Result<void>
     return {};
 }
 
-auto SkeletonBase::StopOfferService() noexcept -> void
+auto SkeletonBase::StopOfferService() -> void
 {
     if (skeleton_mock_ != nullptr)
     {

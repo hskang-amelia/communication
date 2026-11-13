@@ -22,7 +22,7 @@
 #[macro_export]
 macro_rules! interface_producer {
     ($id:ident, $($event_name:ident, Event<$event_type:ty>),+$(,)?) => {
-        score_com::paste::paste!  {
+        score_com::pastey::paste!  {
             pub struct [<$id Producer>]<R: score_com::Runtime + ?Sized> {
                 _runtime: core::marker::PhantomData<R>,
                 instance_info: R::ProviderInfo,
@@ -123,7 +123,7 @@ macro_rules! interface_producer_mixed {
         fields_getter[$($fig_name:ident : $fig_type:ty ,)*],
         methods[$($me_name:ident [$($me_arg_ty:ty),*] -> $me_ret:ty ,)*]
     ) => {
-        score_com::paste::paste! {
+        score_com::pastey::paste! {
             // Producer struct - derives TypeStateValidator for compile-time `offer()`.
             // Fields: FieldPublisher per field + MethodHandler per method.
             // Event publishers are NOT stored here they are created during _offer_internal().

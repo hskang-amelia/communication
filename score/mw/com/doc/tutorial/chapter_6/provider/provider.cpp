@@ -13,10 +13,10 @@
 #include "score/mw/com/doc/tutorial/chapter_6/hello_world_service.h"
 #include "score/mw/com/types.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
-#include <cstdio>
-#include <cstring>
+#include <string>
 
 constexpr std::string_view kHelloWorld{"Hello World"};
 namespace
@@ -55,23 +55,21 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Allocate a slot, where to publish the next event
+        // [provider-allocate-start]
         auto sample_allocatee_ptr = hello_world_service_instance.message.Allocate();
         if (!sample_allocatee_ptr)
         {
             std::cerr << "Failed to allocate sample_allocatee_ptr: " << sample_allocatee_ptr.error() << std::endl;
             continue;
         }
+        // [provider-allocate-end]
 
         // Write new event data to slot
-        std::memcpy(sample_allocatee_ptr.value().Get()->data(), kHelloWorld.data(), kHelloWorld.size());
-        auto* buf = sample_allocatee_ptr.value().Get()->data();
-        const auto remaining = sample_allocatee_ptr.value().Get()->size() - kHelloWorld.size();
-        const auto chars_written = std::snprintf(buf + kHelloWorld.size(), remaining, "%zu", send_counter);
-        if (chars_written < 0)
-        {
-            std::cerr << "Failed to write 'send_counter' to sample_allocatee_ptr!" << std::endl;
-            exit(1);
-        }
+        const std::string message = std::string{kHelloWorld} + std::to_string(send_counter);
+        auto& sample = *sample_allocatee_ptr.value().Get();
+        auto* buf = sample.data();
+        const auto chars_to_copy = std::min(message.size(), sample.size() - 1U);
+        *std::copy_n(message.begin(), chars_to_copy, sample.begin()) = '\0';
 
         // Send the new event sample (make it visible to potential consumers)
         auto send_result = hello_world_service_instance.message.Send(std::move(sample_allocatee_ptr.value()));

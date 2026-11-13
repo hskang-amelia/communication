@@ -12,12 +12,20 @@
  ********************************************************************************/
 #include "score/mw/com/impl/bindings/lola/proxy_instance_identifier.h"
 
+#include "score/language/safecpp/safe_math/safe_math.h"
+
 namespace score::mw::com::impl::lola
 {
 
 bool operator==(const ProxyInstanceIdentifier& lhs, const ProxyInstanceIdentifier& rhs) noexcept
 {
-    return ((lhs.application_id == rhs.application_id) && (lhs.proxy_instance_counter == rhs.proxy_instance_counter));
+    return (safe_math::CmpEqual(lhs.application_id, rhs.application_id) &&
+            safe_math::CmpEqual(lhs.proxy_instance_counter, rhs.proxy_instance_counter));
+}
+
+bool operator!=(const ProxyInstanceIdentifier& lhs, const ProxyInstanceIdentifier& rhs) noexcept
+{
+    return !(lhs == rhs);
 }
 
 std::ostream& operator<<(std::ostream& stream, const ProxyInstanceIdentifier& value)

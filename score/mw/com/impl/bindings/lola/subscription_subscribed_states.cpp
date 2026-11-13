@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 #include "score/mw/com/impl/bindings/lola/subscription_subscribed_states.h"
+#include "score/language/safecpp/safe_math/safe_math.h"
 #include "score/mw/com/impl/bindings/lola/subscription_helpers.h"
 #include "score/mw/com/impl/bindings/lola/subscription_state_machine.h"
 #include "score/mw/com/impl/bindings/lola/subscription_state_machine_states.h"
@@ -34,12 +35,12 @@ Result<void> SubscribedState::SubscribeEvent(const std::size_t max_sample_count)
     // different max_sample_count.
     // coverity[autosar_cpp14_a4_7_1_violation]
     const auto max_sample_count_uint16 = static_cast<std::uint16_t>(max_sample_count);
-    if (state_machine_.subscription_data_.max_sample_count_.value() == max_sample_count_uint16)
+    if (safe_math::CmpEqual(state_machine_.subscription_data_.max_sample_count_.value(), max_sample_count_uint16))
     {
         ::score::mw::log::LogWarn("lola")
             << CreateLoggingString("Calling SubscribeEvent() while already subscribed has no effect.",
                                    state_machine_.GetElementFqId(),
-                                   state_machine_.GetCurrentStateNoLock());
+                                   state_machine_.GetCurrentState());
         return {};
     }
     else
@@ -47,7 +48,7 @@ Result<void> SubscribedState::SubscribeEvent(const std::size_t max_sample_count)
         ::score::mw::log::LogError("lola") << CreateLoggingString(
             "Calling SubscribeEvent() while already subscribed with a different max_sample_count is illegal.",
             state_machine_.GetElementFqId(),
-            state_machine_.GetCurrentStateNoLock());
+            state_machine_.GetCurrentState());
         return MakeUnexpected(ComErrc::kMaxSampleCountNotRealizable);
     }
 }
@@ -70,7 +71,7 @@ void SubscribedState::ReOfferEvent(const pid_t)
 {
     ::score::mw::log::LogWarn("lola") << CreateLoggingString("Service cannot be re-offered while already subscribed.",
                                                              state_machine_.GetElementFqId(),
-                                                             state_machine_.GetCurrentStateNoLock());
+                                                             state_machine_.GetCurrentState());
 }
 
 void SubscribedState::SetReceiveHandler(std::weak_ptr<ScopedEventReceiveHandler> handler)
@@ -85,10 +86,11 @@ void SubscribedState::UnsetReceiveHandler()
 
 std::optional<std::uint16_t> SubscribedState::GetMaxSampleCount() const
 {
+    const auto max_sample_count = state_machine_.subscription_data_.max_sample_count_.value();
     SCORE_LANGUAGE_FUTURECPP_ASSERT_MESSAGE(
-        state_machine_.subscription_data_.max_sample_count_.value() > 0U,
+        max_sample_count > 0U,
         "The subscription dispatch manager and the contained max sample count should be initialised on subscription.");
-    return state_machine_.subscription_data_.max_sample_count_.value();
+    return max_sample_count;
 }
 
 std::optional<SlotCollector>& SubscribedState::GetSlotCollector() & noexcept

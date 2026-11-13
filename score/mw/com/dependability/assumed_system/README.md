@@ -1,3 +1,16 @@
+<!-- ----------------------------------------------------------------------------
+  Copyright (c) 2026 Contributors to the Eclipse Foundation
+
+  See the NOTICE file(s) distributed with this work for additional
+  information regarding copyright ownership.
+
+  This program and the accompanying materials are made available under the
+  terms of the Apache License Version 2.0 which is available at
+  https://www.apache.org/licenses/LICENSE-2.0
+
+  SPDX-License-Identifier: Apache-2.0
+----------------------------------------------------------------------------- -->
+
 # Assumptions for SEooC
 
 The goal of the communication framework (`mw::com`) is to develop a Safety Element out of Context as per the ISO26262:
@@ -14,8 +27,8 @@ to exchange data with each other to execute their functionality.
 Since not every process should come up with its own custom infrastructure on how to exchange data, it is the main purpose
 of this software component to provide infrastructure for processes to exchange data in a safe and secure manner.
 
-The assumed functional requirements are specified
-within [assumed_functional_requirements.trlc](assumed_functional_requirements.trlc).
+The assumed system requirements are specified
+within [assumed_system_requirements.trlc](assumed_system_requirements.trlc).
 
 We assume further that the software component is part of the following layered architecture:
 

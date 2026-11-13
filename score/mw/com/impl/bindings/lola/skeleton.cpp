@@ -240,7 +240,7 @@ std::unique_ptr<Skeleton> Skeleton::Create(const InstanceIdentifier& identifier,
                                             std::move(service_instance_existence_mutex_and_lock));
 }
 
-Skeleton::Skeleton(const InstanceIdentifier& identifier,
+Skeleton::Skeleton(InstanceIdentifier identifier,
                    const LolaServiceInstanceDeployment& lola_service_instance_deployment,
                    const LolaServiceTypeDeployment& lola_service_type_deployment,
                    score::filesystem::Filesystem filesystem,
@@ -250,7 +250,7 @@ Skeleton::Skeleton(const InstanceIdentifier& identifier,
                    std::unique_ptr<memory::shared::FlockMutexAndLock<memory::shared::ExclusiveFlockMutex>>
                        service_instance_existence_flock_mutex_and_lock)
     : SkeletonBinding{},
-      identifier_{identifier},
+      identifier_{std::move(identifier)},
       quality_type_{InstanceIdentifierView{identifier_}.GetServiceInstanceDeployment().asilLevel_},
       lola_instance_id_{lola_service_instance_deployment.instance_id_.value().GetId()},
       lola_service_id_{lola_service_type_deployment.service_id_},
@@ -365,7 +365,9 @@ auto Skeleton::PrepareOffer(SkeletonEventBindings& events,
         // LCOV_EXCL_START (DetermineShmReuseStrategy always returns a valid strategy; kUnknownStrategy is unreachable)
         case ShmReuseStrategy::kUnknownStrategy:
         default:
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(false, "Unknown SHM reuse strategy.");
+            // Reachable in principle, but must not be reached in production: A kUnknownStrategy is never returned by
+            // DetermineShmReuseStrategy in production.
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE_MESSAGE("Unknown SHM reuse strategy.");
             break;
             // LCOV_EXCL_STOP
     }
@@ -511,7 +513,9 @@ auto Skeleton::PrepareStopOffer(std::optional<UnregisterShmObjectTraceCallback> 
         // unreachable)
         case ShmRemovalStrategy::kUnknownStrategy:
         default:
-            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(false, "Unknown SHM removal strategy.");
+            // Reachable in principle, but must not be reached in production: A kUnknownStrategy is never returned by
+            // DetermineShmRemovalStrategy in production.
+            SCORE_LANGUAGE_FUTURECPP_UNREACHABLE_MESSAGE("Unknown SHM removal strategy.");
             break;
             // LCOV_EXCL_STOP
     }
@@ -573,7 +577,7 @@ bool Skeleton::VerifyAllMethodHandlersRegistered() const
 
 auto Skeleton::Register(const ElementFqId element_fq_id,
                         const SkeletonEventProperties& element_properties,
-                        const memory::DataTypeSizeInfo sample_size_info,
+                        const memory::DataTypeSizeInfo data_type_size_info,
                         const std::optional<InitializeSampleCallback>& initialize_sample_callback) -> RegistrationResult
 {
     if (use_gateway_forwarded_shm_ || was_old_shm_region_reopened_)
@@ -602,7 +606,7 @@ auto Skeleton::Register(const ElementFqId element_fq_id,
     }
 
     auto& event_data_storage = memory_manager_.CreateEventDataInCreatedSharedMemory(
-        element_fq_id, element_properties, sample_size_info, initialize_sample_callback);
+        element_fq_id, element_properties, data_type_size_info, initialize_sample_callback);
     auto [event_data_control_qm, event_data_control_asil_b] =
         memory_manager_.CreateEventControlsInCreatedSharedMemory(element_fq_id, element_properties);
 
@@ -769,6 +773,7 @@ auto Skeleton::SubscribeMethods(const MethodData& method_data,
             // If subscription failed for any of the methods, then subscription fails for the entire Proxy. Therefore,
             // we can unsubscribe the methods that were already successfully subscribed.
             std::vector<UniqueMethodIdentifier> method_ids_to_unsubscribe{};
+            method_ids_to_unsubscribe.reserve(method_idx);
             for (std::size_t registered_method_idx = 0U; registered_method_idx < method_idx; ++registered_method_idx)
             {
                 method_ids_to_unsubscribe.push_back(method_call_queues[registered_method_idx].first);

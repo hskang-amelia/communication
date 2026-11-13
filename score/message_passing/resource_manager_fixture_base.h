@@ -167,9 +167,10 @@ class ResourceManagerMockHelper
             } data{{}, {1, 2, 3, 4}};
             io_write_t& message = data.message;
             message.i.xtype = io_write.xtype;
-            message.i.nbytes = io_write.nbytes;
+            message.i.nbytes = static_cast<std::uint32_t>(io_write.nbytes);
             context.offset = 0;  // explicitly
-            context.info.msglen = context.offset + sizeof(io_write_t) + io_write.nbytes_max;
+            context.info.msglen = static_cast<std::int32_t>(static_cast<std::size_t>(context.offset) +
+                                                            sizeof(io_write_t) + io_write.nbytes_max);
 
             const auto result = (*io_funcs_->write)(&context, &message, ocb_);
             promises_.write.set_value(result);
@@ -179,7 +180,7 @@ class ResourceManagerMockHelper
             auto& io_read = std::get<IoReadMessage>(current_message_);
             io_read_t message{};
             message.i.xtype = io_read.xtype;
-            message.i.nbytes = io_read.nbytes;
+            message.i.nbytes = static_cast<std::uint32_t>(io_read.nbytes);
 
             const auto result = (*io_funcs_->read)(&context, &message, ocb_);
             promises_.read.set_value(result);
@@ -283,7 +284,7 @@ class ResourceManagerMockHelper
 
     /// Queues an io_write event
     void HelperInsertIoWrite(score::cpp::expected_blank<std::int32_t> iofunc_write_verify_result,
-                             std::int32_t xtype = _IO_XTYPE_NONE,
+                             std::uint32_t xtype = _IO_XTYPE_NONE,
                              std::size_t nbytes = 0UL,
                              std::size_t nbytes_max = 0UL)
     {
@@ -292,7 +293,7 @@ class ResourceManagerMockHelper
 
     /// Queues an io_write event
     void HelperInsertIoRead(score::cpp::expected_blank<std::int32_t> iofunc_read_verify_result,
-                            std::int32_t xtype = _IO_XTYPE_NONE,
+                            std::uint32_t xtype = _IO_XTYPE_NONE,
                             std::size_t nbytes = 0UL)
     {
         message_queue_.CreateSender().push(IoReadMessage{iofunc_read_verify_result, xtype, nbytes});
@@ -351,7 +352,7 @@ class ResourceManagerMockHelper
     struct IoWriteMessage
     {
         score::cpp::expected_blank<std::int32_t> iofunc_write_verify_result;
-        std::int32_t xtype;
+        std::uint32_t xtype;
         std::size_t nbytes;
         std::size_t nbytes_max;
     };
@@ -359,7 +360,7 @@ class ResourceManagerMockHelper
     struct IoReadMessage
     {
         score::cpp::expected_blank<std::int32_t> iofunc_read_verify_result;
-        std::int32_t xtype;
+        std::uint32_t xtype;
         std::size_t nbytes;
     };
 

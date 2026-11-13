@@ -30,8 +30,10 @@ constexpr std::string_view kInstanceSpecifierString{"MyHelloWorldServiceInstance
 // waits a randomized amount of time (between kMinSendDelay and kMaxSendDelay) before it sends the next sample. This
 // models a provider that emits event updates only occasionally / at times not anticipated by the consumer - which is
 // exactly the scenario in which an event-driven (receive-handler based) consumer shines.
+// [provider-send-delay-limits-start]
 constexpr std::chrono::milliseconds kMinSendDelay{100};
 constexpr std::chrono::milliseconds kMaxSendDelay{3000};
+// [provider-send-delay-limits-end]
 
 namespace
 {
@@ -58,11 +60,9 @@ void SendSample(HelloWorldSkeleton& service_instance, const std::size_t send_cou
 
     // Write new event data to the slot.
     const std::string message = std::string{"Hello World #"} + std::to_string(send_counter);
-    auto* const buf = sample_allocatee_ptr.value().Get()->data();
-    const auto capacity = sample_allocatee_ptr.value().Get()->size();
-    const auto chars_to_copy = std::min(message.size(), capacity - 1U);
-    std::memcpy(buf, message.data(), chars_to_copy);
-    buf[chars_to_copy] = '\0';
+    auto& sample = *sample_allocatee_ptr.value().Get();
+    const auto chars_to_copy = std::min(message.size(), sample.size() - 1U);
+    *std::copy_n(message.begin(), chars_to_copy, sample.begin()) = '\0';
 
     // Send the new event sample (make it visible to potential consumers)
     auto send_result = service_instance.message.Send(std::move(sample_allocatee_ptr.value()));
@@ -72,7 +72,7 @@ void SendSample(HelloWorldSkeleton& service_instance, const std::size_t send_cou
     }
     else
     {
-        std::cout << "Sample send completed. Event \"message\" update sent: " << buf << std::endl;
+        std::cout << "Sample send completed. Event \"message\" update sent: " << message << std::endl;
     }
 }
 }  // namespace
@@ -95,6 +95,7 @@ int main()
                                                 "Failed to offer HelloWorldSkeleton instance!");
     std::cout << "OfferService: HelloWorld service instance is now offered." << std::endl;
 
+    // [provider-random-send-delay-start]
     // Random number generator for the randomized send delay.
     std::mt19937 random_engine{std::random_device{}()};
     std::uniform_int_distribution<std::chrono::milliseconds::rep> delay_distribution{kMinSendDelay.count(),
@@ -116,5 +117,6 @@ int main()
         SendSample(service_instance, send_counter);
         ++send_counter;
     }
+    // [provider-random-send-delay-end]
     std::cout << "HelloWorld service provider going down." << std::endl;
 }

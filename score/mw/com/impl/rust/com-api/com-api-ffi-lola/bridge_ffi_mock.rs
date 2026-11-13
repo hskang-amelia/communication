@@ -1,4 +1,4 @@
-/********************************************************************************
+/*******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
+ * <https://www.apache.org/licenses/LICENSE-2.0>
  *
  * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+ *******************************************************************************/
 
 // This is for internal use only, not part of public API, so we can hide it from crate level docs.
 #![doc(hidden)]
@@ -326,17 +326,10 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         type_ops: &TypeOperationsManager,
     ) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .get_allocatee_ptr(event_ptr, allocatee_ptr, type_ops)
-        }
+        unsafe { self.locked().get_allocatee_ptr(event_ptr, allocatee_ptr, type_ops) }
     }
 
-    unsafe fn delete_allocatee_ptr(
-        &self,
-        allocatee_ptr: *mut std::ffi::c_void,
-        type_ops: &TypeOperationsManager,
-    ) {
+    unsafe fn delete_allocatee_ptr(&self, allocatee_ptr: *mut std::ffi::c_void, type_ops: &TypeOperationsManager) {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe { self.locked().delete_allocatee_ptr(allocatee_ptr, type_ops) }
     }
@@ -347,10 +340,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         type_ops: &TypeOperationsManager,
     ) -> *mut std::ffi::c_void {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .get_allocatee_data_ptr(allocatee_ptr, type_ops)
-        }
+        unsafe { self.locked().get_allocatee_data_ptr(allocatee_ptr, type_ops) }
     }
 
     unsafe fn skeleton_event_send_sample_allocatee(
@@ -374,11 +364,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         unsafe { self.locked().sample_ptr_get(sample_ptr, type_ops) }
     }
 
-    unsafe fn sample_ptr_delete(
-        &self,
-        sample_ptr: *mut std::ffi::c_void,
-        type_ops: &TypeOperationsManager,
-    ) {
+    unsafe fn sample_ptr_delete(&self, sample_ptr: *mut std::ffi::c_void, type_ops: &TypeOperationsManager) {
         unsafe { self.locked().sample_ptr_delete(sample_ptr, type_ops) }
     }
 
@@ -423,10 +409,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         event_id: &str,
     ) -> *mut ProxyEventBase {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .get_event_from_proxy(proxy_ptr, interface_id, event_id)
-        }
+        unsafe { self.locked().get_event_from_proxy(proxy_ptr, interface_id, event_id) }
     }
 
     unsafe fn get_event_from_skeleton(
@@ -442,11 +425,7 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         }
     }
 
-    unsafe fn subscribe_to_event(
-        &self,
-        event_ptr: *mut ProxyEventBase,
-        max_num_samples: u32,
-    ) -> bool {
+    unsafe fn subscribe_to_event(&self, event_ptr: *mut ProxyEventBase, max_num_samples: u32) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe { self.locked().subscribe_to_event(event_ptr, max_num_samples) }
     }
@@ -476,17 +455,10 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         data_ptr: *const std::ffi::c_void,
     ) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .skeleton_send_event(event_ptr, type_ops, data_ptr)
-        }
+        unsafe { self.locked().skeleton_send_event(event_ptr, type_ops, data_ptr) }
     }
 
-    unsafe fn set_event_receive_handler(
-        &self,
-        event_ptr: *mut ProxyEventBase,
-        callback: &FatPtr,
-    ) -> bool {
+    unsafe fn set_event_receive_handler(&self, event_ptr: *mut ProxyEventBase, callback: &FatPtr) -> bool {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
         unsafe { self.locked().set_event_receive_handler(event_ptr, callback) }
     }
@@ -509,16 +481,9 @@ impl bridge_ffi_rs::FFIBridge for SharedMockBridge {
         unsafe { self.locked().stop_find_service(find_service_handle) }
     }
 
-    unsafe fn get_type_ops_instance(
-        &self,
-        interface_id: &str,
-        member_name: &str,
-    ) -> Option<TypeOperationsManager> {
+    unsafe fn get_type_ops_instance(&self, interface_id: &str, member_name: &str) -> Option<TypeOperationsManager> {
         //Safety: This is just forwarding the call to the inner mock, which is expected to be configured correctly in tests using mockall's expectations.
-        unsafe {
-            self.locked()
-                .get_type_ops_instance(interface_id, member_name)
-        }
+        unsafe { self.locked().get_type_ops_instance(interface_id, member_name) }
     }
 
     fn find_service(&self, instance_specifier: InstanceSpecifier) -> Result<HandleContainer, ()> {
@@ -702,10 +667,7 @@ impl<T: Default> MockPointerAllocator<T> {
     pub fn allocate(&self) -> *mut T {
         let mut allocs = self.locked();
         allocs.push(Box::default());
-        allocs
-            .last_mut()
-            .expect("Failed to allocate pointer")
-            .as_mut() as *mut T
+        allocs.last_mut().expect("Failed to allocate pointer").as_mut() as *mut T
     }
 
     /// Free a previously allocated pointer.

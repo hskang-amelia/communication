@@ -1,3 +1,16 @@
+<!-- ----------------------------------------------------------------------------
+  Copyright (c) 2026 Contributors to the Eclipse Foundation
+
+  See the NOTICE file(s) distributed with this work for additional
+  information regarding copyright ownership.
+
+  This program and the accompanying materials are made available under the
+  terms of the Apache License Version 2.0 which is available at
+  https://www.apache.org/licenses/LICENSE-2.0
+
+  SPDX-License-Identifier: Apache-2.0
+----------------------------------------------------------------------------- -->
+
 # LoLa inter-domain Gateway
 
 ## Overview
@@ -78,10 +91,12 @@ files in its domain:
 2. The transport-layer config file referenced by the `config-path` field of the `transport-layer` section in
    `mw_com_gateway_config.json`. Its content is transport-specific and is parsed during
    `GatewayApplication::Setup()` by the selected transport (via `TransportFactory::Create()`). For the bundled
-   `sample_hypervisor` transport this is the hypervisor-socket config (remote IP, local/remote ports, request
-   timeout) — see its
+   `sample_hypervisor` and `qemu_hypervisor` transports this is the hypervisor-socket config (remote IP,
+   local/remote ports, request timeout) — see its
    [schema](transport_layer/sample/configuration/mw_com_gateway_sample_transport_config_schema.json) and
-   [example](transport_layer/sample/configuration/example/mw_com_gateway_sample_transport_config.json).
+   [example](transport_layer/sample/configuration/example/mw_com_gateway_sample_transport_config.json). For the
+   QEMU transport, the same file also carries the optional `ivshmem.preferred-bar-num` setting (default BAR2)
+   used when mapping the shared-memory BAR.
 3. `mw_com_config.json` — standard `mw::com` deployment config (provided as for all `mw::com` applications).
    Required by the `mw::com` runtime to resolve the `InstanceSpecifier`s referenced in
    `mw_com_gateway_config.json` into concrete deployment info (binding, number of slots, ASIL level, allowed

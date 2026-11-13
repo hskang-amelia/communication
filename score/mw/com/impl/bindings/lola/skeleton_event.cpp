@@ -12,6 +12,8 @@
  ********************************************************************************/
 #include "score/mw/com/impl/bindings/lola/skeleton_event.h"
 
+#include "score/mw/com/impl/bindings/lola/sample_ptr.h"
+
 namespace score::mw::com::impl::lola
 {
 
@@ -24,7 +26,7 @@ SkeletonEvent::SkeletonEvent(Skeleton& parent,
     : parent_{parent},
       event_name_{event_name},
       element_fq_id_(element_fq_id),
-      event_data_storage_{nullptr},
+      event_data_storage_local_view_{std::nullopt},
       event_sample_size_info_(size_info),
       event_properties_{properties},
       current_timestamp_{EventSlotStatus::INVALID_TIMESTAMP},
@@ -38,7 +40,7 @@ SkeletonEvent::SkeletonEvent(Skeleton& parent,
 }
 
 Result<void> SkeletonEvent::Send(impl::SampleAllocateePtr<void> sample,
-                                 std::optional<SendTraceCallback> send_trace_callback) noexcept
+                                 const std::optional<SendTraceCallback>& send_trace_callback)
 {
     const impl::SampleAllocateePtrView<void> view{sample};
     const auto* ptr = view.template As<lola::SampleAllocateePtr>();
@@ -66,7 +68,7 @@ Result<void> SkeletonEvent::Send(impl::SampleAllocateePtr<void> sample,
 // implicitly". std::terminate() is implicitly called from '.value()' in case it doesn't have value but as we check
 // before with 'has_value()' so no way for throwing std::bad_optional_access, which leads to std::terminate().
 // coverity[autosar_cpp14_a15_5_3_violation : FALSE]
-Result<impl::SampleAllocateePtr<void>> SkeletonEvent::Allocate(SampleAllocateeGuard guard) noexcept
+Result<impl::SampleAllocateePtr<void>> SkeletonEvent::Allocate(SampleAllocateeGuard guard)
 {
     if (!event_data_control_composite_.has_value())
     {
@@ -110,19 +112,18 @@ Result<impl::SampleAllocateePtr<void>> SkeletonEvent::Allocate(SampleAllocateeGu
     // Tracing is a diagnostic/monitoring feature with no safety requirement, so QM is sufficient.
     // GetConsumerEventDataControlLocalView(kASIL_B) is a separate code path introduced specifically for
     // GetLatestSample().
-    return MakeSampleAllocateePtr(
-        SampleAllocateePtr(event_data_storage_->GetTypeErasedDataSlot(slot_index, event_sample_size_info_.Size()),
-                           GetEventDataControlComposite(),
-                           GetConsumerEventDataControlLocalView(QualityType::kASIL_QM),
-                           slot_index),
-        std::move(guard));
+    return MakeSampleAllocateePtr(SampleAllocateePtr(event_data_storage_local_view_->GetTypeErasedDataSlot(slot_index),
+                                                     GetEventDataControlComposite(),
+                                                     GetConsumerEventDataControlLocalView(QualityType::kASIL_QM),
+                                                     slot_index),
+                                  std::move(guard));
 }
 
 Result<impl::SamplePtr<void>> SkeletonEvent::GetLatestSample(QualityType quality_type)
 {
     const QualityType event_quality_type = parent_.GetInstanceQualityType();
     SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(
-        !((event_quality_type == QualityType::kASIL_QM) && (quality_type == QualityType::kASIL_B)),
+        (event_quality_type != QualityType::kASIL_QM) || (quality_type != QualityType::kASIL_B),
         "ASIL-B event support ASIL-QM and ASIL-B quality types, but ASIL-QM event support only ASIL-QM quality type.");
 
     auto guard = getter_sample_tracker_.Allocate(1U).TakeGuard();
@@ -138,31 +139,26 @@ Result<impl::SamplePtr<void>> SkeletonEvent::GetLatestSample(QualityType quality
     // ReferenceNextEvent returns the slot with the highest timestamp in the exclusive range (min, max).
     // We pass 0 and TIMESTAMP_MAX to span the entire valid timestamp range, so it always returns the
     // most recently written sample regardless of its timestamp.
-    const auto slot_result = consumer_event_data_control_local.ReferenceNextEvent(EventSlotStatus::EventTimeStamp{0U},
-                                                                                  EventSlotStatus::TIMESTAMP_MAX);
+    const auto slot_result = consumer_event_data_control_local.ReferenceNextEvent(0U, EventSlotStatus::TIMESTAMP_MAX);
     if (!slot_result.has_value())
     {
         ::score::mw::log::LogError("lola") << "ReferenceNextEvent did not return a slot index";
         return MakeUnexpected(ComErrc::kBindingFailure);
     }
 
-    return impl::SamplePtr<void>{
-        lola::SamplePtr<void>{event_data_storage_->GetTypeErasedDataSlot(*slot_result, event_sample_size_info_.Size()),
-                              consumer_event_data_control_local,
-                              slot_result.value()},
-        std::move(*guard)};
+    return impl::SamplePtr<void>{lola::SamplePtr{event_data_storage_local_view_->GetTypeErasedDataSlot(*slot_result),
+                                                 consumer_event_data_control_local,
+                                                 slot_result.value()},
+                                 std::move(*guard)};
 }
 
-Result<void> SkeletonEvent::PrepareOffer(
-    const std::optional<InitializeSampleCallback>& initialize_sample_callback) noexcept
+Result<void> SkeletonEvent::PrepareOffer(const std::optional<InitializeSampleCallback>& initialize_sample_callback)
 {
-    // Invariant: after a successful PrepareOffer(), event_data_storage_ is guaranteed to be non-null.
-    // All methods that require event_data_storage_ (e.g. GetLatestSample) rely on this invariant.
+    // Invariant: after a successful PrepareOffer(), event_data_storage_local_view_ is guaranteed to be non-null.
+    // All methods that require event_data_storage_local_view_ (e.g. GetLatestSample) rely on this invariant.
     const auto registration_result =
         parent_.Register(element_fq_id_, event_properties_, event_sample_size_info_, initialize_sample_callback);
-    event_data_storage_ = &registration_result.event_data_storage;
-    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(event_data_storage_ != nullptr,
-                                                "event_data_storage_ must be non-null after PrepareOffer");
+    event_data_storage_local_view_.emplace(registration_result.event_data_storage, event_sample_size_info_);
 
     auto& provider_control_local_view_qm =
         provider_control_local_view_qm_.emplace(registration_result.event_control_qm.data_control);
@@ -232,7 +228,7 @@ Result<void> SkeletonEvent::PrepareOffer(
                 if (receive_handler_registration_changed_callback_.has_value())
                 {
                     const bool qm_registered = qm_event_update_notifications_registered_.load();
-                    receive_handler_registration_changed_callback_.value()(qm_registered);
+                    (*receive_handler_registration_changed_callback_)(qm_registered);
                 }
             });
 
@@ -246,7 +242,7 @@ Result<void> SkeletonEvent::PrepareOffer(
                     if (receive_handler_registration_changed_callback_.has_value())
                     {
                         const bool asil_b_registered = asil_b_event_update_notifications_registered_.load();
-                        receive_handler_registration_changed_callback_.value()(asil_b_registered);
+                        (*receive_handler_registration_changed_callback_)(asil_b_registered);
                     }
                 });
     }
@@ -254,7 +250,7 @@ Result<void> SkeletonEvent::PrepareOffer(
     return {};
 }
 
-void SkeletonEvent::PrepareStopOffer() noexcept
+void SkeletonEvent::PrepareStopOffer()
 {
     // Unregister event notification existence changed callbacks
     GetBindingRuntime<lola::IRuntime>(BindingType::kLoLa)
@@ -313,7 +309,7 @@ void SkeletonEvent::ResetGuards() noexcept
     }
 }
 
-Result<void> SkeletonEvent::NotifyConsumersIfHandlersRegistered() noexcept
+Result<void> SkeletonEvent::NotifyConsumersIfHandlersRegistered()
 {
     // Only call NotifyEvent if there are any registered receive handlers for each quality level.
     // This avoids the expensive lock operation in the common case where no handlers are registered.
@@ -333,7 +329,7 @@ Result<void> SkeletonEvent::NotifyConsumersIfHandlersRegistered() noexcept
     return {};
 }
 
-Result<void> SkeletonEvent::Notify() noexcept
+Result<void> SkeletonEvent::Notify()
 {
     return NotifyConsumersIfHandlersRegistered();
 }

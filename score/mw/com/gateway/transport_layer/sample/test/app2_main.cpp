@@ -12,6 +12,7 @@
  ********************************************************************************/
 #include "score/mw/com/gateway/transport_layer/sample/bidirectional_transport.h"
 #include "score/mw/com/gateway/transport_layer/sample/configuration/hypervisor_socket_configuration.h"
+#include "score/string_manipulation/arguments/arguments.h"
 
 #include <atomic>
 #include <iostream>
@@ -41,6 +42,10 @@ void SendMessages(BidirectionalTransport& transport)
         4U,
         8U};
     const auto send_result = transport.SendRequest(service_request);
+    if (!send_result)
+    {
+        std::cerr << "Failed to send request: " << send_result.error() << std::endl;
+    }
 
     auto notification = score::mw::com::gateway::RegisterNotificationRequest{
         score::mw::com::impl::InstanceSpecifier::Create(std::string{"TestService/Instance1"}).value(),
@@ -186,12 +191,13 @@ int ExecuteWithReconnect()
 }
 
 }  // namespace
-int main(int argc, char* argv[])
+int main(int argc, const char* argv[])
 {
     std::string mode = "regular_case";
-    if (argc > 1)
+    const auto arguments = score::string_manipulation::GetArguments(argc, argv);
+    if (arguments.size() > 1U)
     {
-        mode = argv[1];
+        mode = arguments[1];
     }
 
     if (mode == "reconnect")

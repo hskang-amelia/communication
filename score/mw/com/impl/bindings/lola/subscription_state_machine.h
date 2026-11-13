@@ -91,7 +91,14 @@ class SubscriptionStateMachine : public std::enable_shared_from_this<Subscriptio
     // coverity[autosar_cpp14_m3_2_4_violation]
     virtual ~SubscriptionStateMachine() noexcept;
 
-    SubscriptionStateMachineState GetCurrentState() const noexcept;
+    // Hot-path optimization: current_state_idx_ is atomic, so GetCurrentState() is a simple lock-free atomic load and
+    // is defined inline here. GetNewSamples()/GetNumNewSamplesAvailable() call it on every invocation; taking
+    // state_mutex_ would serialize the hot path against unrelated state-machine operations for no benefit. See the
+    // thread-safety note on GetSlotCollectorLockFree() below for the detailed rationale.
+    SubscriptionStateMachineState GetCurrentState() const noexcept
+    {
+        return current_state_idx_.load();
+    }
 
     // State Machine Events. These are modelled by the state machine UML and cause transitions between states. The
     // thread currently processing an event will block until all queued events are processed. All other calls will be
@@ -132,10 +139,9 @@ class SubscriptionStateMachine : public std::enable_shared_from_this<Subscriptio
     std::optional<SlotCollector>& GetSlotCollectorLockFree() noexcept;
     const std::optional<SlotCollector>& GetSlotCollectorLockFree() const noexcept;
     [[nodiscard]] const ElementFqId& GetElementFqId() const& noexcept;
+    const ElementFqId&& GetElementFqId() const&& noexcept = delete;
 
   private:
-    SubscriptionStateMachineState GetCurrentStateNoLock() const noexcept;
-
     // Private member methods should be called under lock
     SubscriptionStateBase& GetCurrentEventState() noexcept;
     const SubscriptionStateBase& GetCurrentEventState() const noexcept;

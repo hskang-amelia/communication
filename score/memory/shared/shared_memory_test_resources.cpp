@@ -15,6 +15,7 @@
 #include "score/memory/shared/shared_memory_factory.h"
 #include "score/os/utils/acl/i_access_control_list.h"
 
+// NOLINTNEXTLINE(bugprone-reserved-identifier): GoogleMock wildcard matcher, the name is fixed by GoogleMock
 using ::testing::_;
 using ::testing::AtMost;
 using ::testing::DoAll;
@@ -68,19 +69,13 @@ class IAccessControlListMockWrapper : public score::os::IAccessControlList
 
 }  // namespace
 
-constexpr const char* const TestValues::sharedMemorySegmentPath;
-constexpr const std::uint64_t TestValues::sharedMemoryResourceIdentifier;
-constexpr const char* const TestValues::secondSharedMemorySegmentPath;
-constexpr const char* const TestValues::sharedMemorySegmentLockPath;
-constexpr const char* const TestValues::secondSharedMemorySegmentLockPath;
-constexpr std::size_t TestValues::some_share_memory_size;
-constexpr uid_t TestValues::our_uid;
 constexpr auto kTypedmemdUserName = "typed_memory_daemon";
 constexpr auto kTSHMDeviceName = "/dev/typedshm";
 constexpr std::uint32_t kMaxBufferSize = 16384U;
 
 bool is_aligned(const volatile void* const p, const std::size_t n) noexcept
 {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): address-to-integer conversion is inherent here
     return reinterpret_cast<std::uintptr_t>(p) % n == 0;
 }
 

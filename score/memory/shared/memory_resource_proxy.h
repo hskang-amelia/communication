@@ -41,11 +41,6 @@ namespace score::memory::shared
  *        Each `PolymorphicOffsetPtrAllocator` contains an OffsetPtr to a `MemoryResourceProxy` which allows it
  *        to lookup the corresponding `ManagedMemoryResource` in the `MemoryResourceRegistry`.
  */
-
-// Suppress "AUTOSAR C++14 M3-2-3" rule finding: "A type, object or function that is used in multiple translation units
-// shall be declared in one and only one file.".
-// this is false positive. MemoryResourceProxy is declared only once.
-// coverity[autosar_cpp14_m3_2_3_violation : FALSE]
 class MemoryResourceProxy
 {
   public:
@@ -59,7 +54,7 @@ class MemoryResourceProxy
     MemoryResourceProxy(MemoryResourceProxy&&) noexcept = delete;
     MemoryResourceProxy& operator=(MemoryResourceProxy&&) noexcept = delete;
 
-    void* allocate(const std::size_t, const std::size_t = alignof(std::max_align_t)) const noexcept;
+    void* allocate(const std::size_t, const std::size_t = alignof(std::max_align_t)) const;
     void deallocate(void* const, const std::size_t) const;
 
     friend bool operator==(const MemoryResourceProxy& lhs, const MemoryResourceProxy& rhs) noexcept;

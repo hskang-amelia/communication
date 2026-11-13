@@ -22,6 +22,7 @@
 #include "score/mw/com/impl/proxy_event.h"
 #include "score/mw/com/impl/proxy_event_binding.h"
 #include "score/mw/com/impl/proxy_field_base.h"
+#include "score/mw/com/impl/util/type_erased_storage.h"
 
 #include "score/mw/com/impl/methods/proxy_method_base.h"
 
@@ -40,9 +41,6 @@
 namespace score::mw::com::impl
 {
 
-// Suppress "AUTOSAR C++14 M3-2-3" rule finding. This rule states: "An identifier with external linkage shall have
-// exactly one definition". This a forward class declaration.
-// coverity[autosar_cpp14_m3_2_3_violation]
 template <typename FieldType, typename... Tags>
 class ProxyFieldAttorney;
 
@@ -81,13 +79,12 @@ class ProxyFieldImpl : public ProxyFieldBase
     /// \details The template tags do not gate this overload; they continue to control which parts of the public
     ///          API (Get, Set, Subscribe, ...) are available on the resulting object. The event binding parameter
     ///          is required (non default) to disambiguate this overload from the production ctor.
-    /// \param proxy_base Parent proxy that owns this field's registration.
     /// \param field_name Field's name as it appears in the deployment.
     /// \param event_binding Mock event binding. Must be provided (use nullptr if no event binding is needed).
     /// \param set_method_binding Optional mock Set-method binding. If nullptr, no ProxyMethod is built for Set.
     /// \param get_method_binding Optional mock Get-method binding. If nullptr, no ProxyMethod is built for Get.
     ProxyFieldImpl(const std::string_view field_name,
-                   std::unique_ptr<ProxyEventBinding<FieldType>> event_binding,
+                   std::unique_ptr<ProxyEventBinding> event_binding,
                    std::unique_ptr<ProxyMethodBinding> set_method_binding = nullptr,
                    std::unique_ptr<ProxyMethodBinding> get_method_binding = nullptr)
         : ProxyFieldImpl{
@@ -147,7 +144,7 @@ class ProxyFieldImpl : public ProxyFieldBase
     ProxyFieldImpl(ProxyFieldImpl&&) noexcept = default;
     ProxyFieldImpl& operator=(ProxyFieldImpl&&) noexcept = default;
 
-    ~ProxyFieldImpl() noexcept = default;
+    ~ProxyFieldImpl() noexcept override = default;
 
     /**
      * \api
@@ -193,7 +190,7 @@ class ProxyFieldImpl : public ProxyFieldBase
      */
     template <typename T = SampleDataType,
               typename = std::enable_if_t<is_tag_enabled<T, SampleDataType, WithNotifier, Tags...>::value>>
-    void Unsubscribe() noexcept
+    void Unsubscribe()
     {
         ProxyFieldBase::Unsubscribe();
     }
@@ -258,7 +255,7 @@ class ProxyFieldImpl : public ProxyFieldBase
      */
     template <typename T = SampleDataType,
               typename = std::enable_if_t<is_tag_enabled<T, SampleDataType, WithNotifier, Tags...>::value>>
-    Result<void> SetReceiveHandler(EventReceiveHandler handler) noexcept
+    Result<void> SetReceiveHandler(EventReceiveHandler handler)
     {
         return ProxyFieldBase::SetReceiveHandler(std::move(handler));
     }
@@ -295,7 +292,7 @@ class ProxyFieldImpl : public ProxyFieldBase
      */
     template <typename T = SampleDataType,
               typename = std::enable_if_t<is_tag_enabled<T, SampleDataType, WithNotifier, Tags...>::value>>
-    Result<void> UnsetReceiveHandler() noexcept
+    Result<void> UnsetReceiveHandler()
     {
         return ProxyFieldBase::UnsetReceiveHandler();
     }
@@ -366,8 +363,10 @@ class ProxyFieldImpl : public ProxyFieldBase
             return std::make_unique<ProxyEvent<FieldType>>(
                 proxy_base,
                 field_name,
-                ProxyFieldBindingFactory<FieldType>::CreateEventBinding(
-                    proxy_base.GetHandle(), ProxyBaseView{proxy_base}.GetBinding(), field_name),
+                ProxyFieldBindingFactory::CreateEventBinding(proxy_base.GetHandle(),
+                                                             ProxyBaseView{proxy_base}.GetBinding(),
+                                                             field_name,
+                                                             CreateDataTypeSizeInfoFromTypes<FieldType>()),
                 typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{});
         }
         else
@@ -386,10 +385,16 @@ class ProxyFieldImpl : public ProxyFieldBase
     {
         if constexpr (kHasSetter)
         {
+            using SetterSignatureInfo = TypeErasedMethodSignatureInfo<SetMethodSignature<FieldType>>;
+            // A field's set-method always has exactly one in-arg (FieldType) and a non-void return type
+            // (Result<FieldType>), so both are guaranteed to be present.
             return std::make_unique<ProxyMethod<SetMethodSignature<FieldType>>>(
                 field_name,
-                ProxyFieldBindingFactory<FieldType>::CreateSetMethodBinding(
-                    proxy_base.GetHandle(), ProxyBaseView{proxy_base}.GetBinding(), field_name),
+                ProxyFieldBindingFactory::CreateSetMethodBinding(proxy_base.GetHandle(),
+                                                                 ProxyBaseView{proxy_base}.GetBinding(),
+                                                                 field_name,
+                                                                 SetterSignatureInfo::InArgsTypeInfo().value(),
+                                                                 SetterSignatureInfo::ReturnTypeInfo().value()),
                 typename ProxyMethod<SetMethodSignature<FieldType>>::FieldSetterConstructorEnabler{});
         }
         else
@@ -408,10 +413,15 @@ class ProxyFieldImpl : public ProxyFieldBase
     {
         if constexpr (kHasGetter)
         {
+            using GetterSignatureInfo = TypeErasedMethodSignatureInfo<GetMethodSignature<FieldType>>;
+            // A field's get-method always has a non-void return type (Result<FieldType>), so it is guaranteed
+            // to be present.
             return std::make_unique<ProxyMethod<GetMethodSignature<FieldType>>>(
                 field_name,
-                ProxyFieldBindingFactory<FieldType>::CreateGetMethodBinding(
-                    proxy_base.GetHandle(), ProxyBaseView{proxy_base}.GetBinding(), field_name),
+                ProxyFieldBindingFactory::CreateGetMethodBinding(proxy_base.GetHandle(),
+                                                                 ProxyBaseView{proxy_base}.GetBinding(),
+                                                                 field_name,
+                                                                 GetterSignatureInfo::ReturnTypeInfo().value()),
                 typename ProxyMethod<GetMethodSignature<FieldType>>::FieldGetterConstructorEnabler{});
         }
         else

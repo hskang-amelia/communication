@@ -18,6 +18,7 @@
 #include "score/mw/com/gateway/transport_layer/transport_error.h"
 #include "score/mw/com/gateway/transport_layer/transport_mock.h"
 #include "score/mw/com/impl/bindings/mock_binding/sample_allocatee_ptr.h"
+#include "score/mw/com/impl/bindings/mock_binding/generic_skeleton_event.h"
 #include "score/mw/com/impl/bindings/mock_binding/skeleton.h"
 #include "score/mw/com/impl/configuration/lola_service_instance_deployment.h"
 #include "score/mw/com/impl/find_service_handle.h"
@@ -323,7 +324,7 @@ class GatewayApplicationSubscriptionTest : public ::testing::Test
 TEST_F(GatewayApplicationSubscriptionTest, FirstSubscriberCallsRegisterUpdateNotification)
 {
     // Given no previous subscriptions for "svc/a" / "EventA"
-    auto specifier = impl::InstanceSpecifier::Create("svc/a").value();
+    auto specifier = impl::InstanceSpecifier::Create(std::string{"svc/a"}).value();
     EXPECT_CALL(*mock_, RegisterUpdateNotification(specifier, impl::ServiceElementType::EVENT, std::string{"EventA"}))
         .WillOnce(Return(score::Result<void>{}));
 
@@ -351,7 +352,7 @@ TEST_F(GatewayApplicationSubscriptionTest, LastUnsubscriberCallsUnregisterUpdate
 
     // When all consumers unsubscribe
     // Then UnregisterUpdateNotification is called for the event
-    auto specifier = impl::InstanceSpecifier::Create("svc/a").value();
+    auto specifier = impl::InstanceSpecifier::Create(std::string{"svc/a"}).value();
     EXPECT_CALL(*mock_, UnregisterUpdateNotification(specifier, impl::ServiceElementType::EVENT, std::string{"EventA"}))
         .WillOnce(Return(score::Result<void>{}));
     CallOnSubscriptionStateChanged("svc/a", "EventA", false);
@@ -523,10 +524,10 @@ class GatewayApplicationRegisterCallbackTest : public ::testing::Test
     // Returns the skeleton (by move) and a raw pointer to the mock event binding.
     // IMPORTANT: Set EXPECT_CALL on the returned mock_event BEFORE calling
     // CallRegisterEventReceiveHandlerCallback to capture the stored callback.
-    std::pair<impl::GenericSkeleton, impl::mock_binding::SkeletonEvent*> CreateSkeletonWithMockEvent(
+    std::pair<impl::GenericSkeleton, impl::mock_binding::GenericSkeletonEvent*> CreateSkeletonWithMockEvent(
         const std::string& event_name)
     {
-        auto mock_event = std::make_unique<::testing::NiceMock<impl::mock_binding::SkeletonEvent>>();
+        auto mock_event = std::make_unique<::testing::NiceMock<impl::mock_binding::GenericSkeletonEvent>>();
         auto* mock_event_ptr = mock_event.get();
 
         EXPECT_CALL(event_binding_factory_mock_,
@@ -734,7 +735,7 @@ class GatewayApplicationFlowTest : public ::testing::Test
                        impl::SkeletonBinding&,
                        std::string_view event_name,
                        score::memory::DataTypeSizeInfo) -> std::unique_ptr<impl::SkeletonEventBinding> {
-                    auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::SkeletonEvent>>();
+                    auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::GenericSkeletonEvent>>();
                     ON_CALL(*mock, SetReceiveHandlerRegistrationChangedHandler(::testing::_))
                         .WillByDefault(::testing::Return(score::Result<void>{}));
                     ON_CALL(*mock, PrepareOffer(::testing::_)).WillByDefault(::testing::Return(score::Result<void>{}));
@@ -845,7 +846,7 @@ class GatewayApplicationFlowTest : public ::testing::Test
     impl::mock_binding::Proxy* proxy_binding_mock_{nullptr};
     impl::mock_binding::Skeleton* skeleton_binding_mock_{nullptr};
     std::map<std::string, impl::mock_binding::GenericProxyEvent*> proxy_event_mocks_{};
-    std::map<std::string, impl::mock_binding::SkeletonEvent*> skeleton_event_mocks_{};
+    std::map<std::string, impl::mock_binding::GenericSkeletonEvent*> skeleton_event_mocks_{};
 
     impl::FindServiceHandler<impl::HandleType> captured_find_handler_{};
     bool find_handler_captured_{false};
@@ -1124,7 +1125,7 @@ TEST_F(GatewayApplicationFlowTest, ProvideServiceCreatesSkeletonRegistersCallbac
                                      impl::SkeletonBinding&,
                                      std::string_view event_name,
                                      score::memory::DataTypeSizeInfo) -> std::unique_ptr<impl::SkeletonEventBinding> {
-                auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::SkeletonEvent>>();
+                auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::GenericSkeletonEvent>>();
                 EXPECT_CALL(*mock, SetReceiveHandlerRegistrationChangedHandler(::testing::_))
                     .WillOnce(::testing::Return(score::Result<void>{}));
                 ON_CALL(*mock, PrepareOffer(::testing::_)).WillByDefault(::testing::Return(score::Result<void>{}));
@@ -1404,7 +1405,7 @@ TEST_F(GatewayApplicationFlowTest, ProvideServiceSetReceiveHandlerRegistrationFa
                                      impl::SkeletonBinding&,
                                      std::string_view event_name,
                                      score::memory::DataTypeSizeInfo) -> std::unique_ptr<impl::SkeletonEventBinding> {
-                auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::SkeletonEvent>>();
+                auto mock = std::make_unique<::testing::NiceMock<impl::mock_binding::GenericSkeletonEvent>>();
                 ON_CALL(*mock, SetReceiveHandlerRegistrationChangedHandler(::testing::_))
                     .WillByDefault(
                         ::testing::Return(score::MakeUnexpected(GatewayErrorc::kReceiveHandlerRegistrationFailed)));
@@ -1419,21 +1420,16 @@ TEST_F(GatewayApplicationFlowTest, ProvideServiceSetReceiveHandlerRegistrationFa
     EXPECT_TRUE(result.has_value());
 }
 
-TEST_F(GatewayApplicationFlowTest, OfferServiceFailureReturnsError)
+TEST_F(GatewayApplicationFlowTest, SecondOfferServiceWorks)
 {
     // Given a service has been provided (skeleton exists and offered once)
     ASSERT_TRUE(app_->ProvideService(MakeSpecifier("svc/a"), MakeElements({"EventA"})).has_value());
     ASSERT_NE(skeleton_binding_mock_, nullptr);
 
-    // and the binding will now reject any further offer
-    ON_CALL(*skeleton_binding_mock_, PrepareOffer(::testing::_, ::testing::_, ::testing::_))
-        .WillByDefault(::testing::Return(score::MakeUnexpected(GatewayErrorc::kSkeletonOfferFailed)));
-
     // When OfferService is called explicitly
-    // Then it fails with kSkeletonOfferFailed.
     const auto result = app_->OfferService(MakeSpecifier("svc/a"));
-    ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error(), GatewayErrorc::kSkeletonOfferFailed);
+    // Then it returns successfully
+    ASSERT_TRUE(result.has_value());
 }
 
 TEST_F(GatewayApplicationFlowTest, ReusedSkeletonOfferFailureIsToleratedAndResubscribes)

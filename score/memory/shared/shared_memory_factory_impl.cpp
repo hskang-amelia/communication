@@ -15,6 +15,7 @@
 #include "score/memory/shared/typedshm/utils/typed_memory_utils.h"
 #include "score/mw/log/logging.h"
 #include "score/os/errno_logging.h"
+#include "score/os/utils/acl/access_control_list.h"
 
 #include "score/os/mman.h"
 #include "score/os/unistd.h"
@@ -22,6 +23,7 @@
 #include <score/assert.hpp>
 #include <score/utility.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -69,14 +71,7 @@ bool checkUidMatch(const uid_t providerUid, const score::cpp::span<const uid_t> 
     {
         return true;
     }
-    for (const auto uid : allowedProviders)
-    {
-        if (providerUid == uid)
-        {
-            return true;
-        }
-    }
-    return false;
+    return std::find(allowedProviders.begin(), allowedProviders.end(), providerUid) != allowedProviders.end();
 }
 
 void InsertResourceIntoMap(

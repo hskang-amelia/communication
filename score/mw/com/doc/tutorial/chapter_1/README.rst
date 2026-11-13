@@ -1,3 +1,17 @@
+..
+   # *******************************************************************************
+   # Copyright (c) 2026 Contributors to the Eclipse Foundation
+   #
+   # See the NOTICE file(s) distributed with this work for additional
+   # information regarding copyright ownership.
+   #
+   # This program and the accompanying materials are made available under the
+   # terms of the Apache License Version 2.0 which is available at
+   # https://www.apache.org/licenses/LICENSE-2.0
+   #
+   # SPDX-License-Identifier: Apache-2.0
+   # *******************************************************************************
+
 Chapter 1: Hello World
 ======================
 
@@ -27,8 +41,6 @@ files:
      - This file contains bazel targets for this example.
    * - `consumer.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/consumer.cpp>`__
      - Implementation of the service consumer app. The `main()` for the consumer
-   * - `consumer.h <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/consumer.h>`__
-     - Header (empty - we just aways want to have cpp/h pairs) of the service consumer.
    * - `hello_world_service.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/hello_world_service.cpp>`__
      - This file is empty as the service interface is completely defined in the header.
    * - `hello_world_service.h <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/hello_world_service.h>`__
@@ -39,8 +51,6 @@ files:
      - This file contains the configuration for `score::mw::com` for our apps.
    * - `provider.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/provider.cpp>`__
      - Implementation of the service provider.
-   * - `provider.h <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/provider.h>`__
-     - Header (empty) of the service provider.
 
 
 ----------------------------------------
@@ -140,7 +150,8 @@ This is our simple service interface, which is declared in `hello_world_service.
 
 .. literalinclude:: hello_world_service.h
    :language: cpp
-   :lines: 20-28
+   :start-after: [hello-world-interface-start]
+   :end-before: [hello-world-interface-end]
    :caption: hello_world_service.h
 
 
@@ -179,13 +190,14 @@ Provider application
 
 
 Now let's have a look at the implementation of the provider of the `HelloWorldService`. It is
-contained in main function of `provider.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/provider.cpp>`__.
+contained in `provider.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/provider.cpp>`__.
 
-The 1st important step happens in line 30:
+The 1st important step happens in the provider's application:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 33-33
+   :start-after: [hello-world-skeleton-alias-start]
+   :end-before: [hello-world-skeleton-alias-end]
    :caption: provider.cpp
 
 
@@ -207,11 +219,12 @@ by invoking `AsSkeleton<HelloWorldInterface>` and introduce an alias for it.
    This you could find out by looking into the implementation of the `AsSkeleton` template in
    `traits.h <https://github.com/eclipse-score/communication/blob/main/score/mw/com/impl/traits.h>`__ and following the inheritance chain of the generated skeleton class.
 
-Then in line 40 we create an instance of the skeleton class with the `Create` (named constructor) method:
+Then we create an instance of the skeleton class with the `Create` (named constructor) method:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 43-43
+   :start-after: [hello-world-skeleton-create-start]
+   :end-before: [hello-world-skeleton-create-end]
    :caption: provider.cpp
 
 
@@ -221,45 +234,49 @@ later. For now, it is sufficient to understand that the `instance specifier` res
 the service instance, which contains all necessary information for the middleware to create the service instance.
 
 After we successfully created the skeleton instance (the returned `score::core::Result` contains the skeleton instance as
-its value in case of success), in line 43 we move the skeleton instance out of the result:
+its value in case of success), we move the skeleton instance out of the result:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 46-46
+   :start-after: [hello-world-skeleton-instance-start]
+   :end-before: [hello-world-skeleton-instance-end]
    :caption: provider.cpp
 
 
 This is just for convenience, as we want to work with the skeleton instance and not with the result wrapper.
 But it also shows a detail here: The `std::move` is needed, because a skeleton instance is not copyable, but only movable.
 This is a design decision, which we made, because a skeleton instance holds a lot of internal state and resources, which
-we don't want to be copied implicitly! In our design documentation `here <https://github.com/eclipse-score/communication/blob/main/score/mw/com/design/skeleton_proxy/README.md#copymove-support-for-binding-independent-and-dependent-proxiesskeletons>`__
+we don't want to be copied implicitly! In our design documentation `here <https://github.com/eclipse-score/communication/blob/main/score/mw/com/impl/dependability/binding_independent_component_design.md#copymove-support-for-binding-independent-proxiesskeletons-and-contained-service-elements>`__
 you'll find a more detailed explanation, why skeletons (and also proxies by the way) are not copyable but only movable.
 
-After the call to `OfferService` in line 45 succeeds:
+After the call to `OfferService` succeeds:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 48-48
+   :start-after: [hello-world-offer-service-start]
+   :end-before: [hello-world-offer-service-end]
    :caption: provider.cpp
 
 
 the service instance is visible for consumers. I.e. they can find the service instance via service-discovery.
-Then in line 50 the provider app enters a loop, where it cyclically sends an update for the "message" event.
+Then the provider app enters a loop, where it cyclically sends an update for the "message" event.
 Since we want to show the zero-copy approach here, this updating/sending of the event is a two-step approach:
 
-Step 1 in line 55 allocates memory for a new event-sample for the "message" event:
+Step 1 allocates memory for a new event-sample for the "message" event:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 58-58
+   :start-after: [hello-world-allocate-start]
+   :end-before: [hello-world-allocate-end]
    :caption: provider.cpp
 
-Step 2 in line 74 then signals to score::mw::com, that updating/writing to the memory is done and this new sample
+Step 2 then signals to score::mw::com, that updating/writing to the memory is done and this new sample
 can be made visible to consumers:
 
 .. literalinclude:: provider.cpp
    :language: cpp
-   :lines: 77-77
+   :start-after: [hello-world-send-start]
+   :end-before: [hello-world-send-end]
    :caption: provider.cpp
 
 
@@ -274,7 +291,7 @@ Consumer Application
 ~~~~~~~~~~~~~~~~~~~~
 
 
-The implementation of the consumer of the `HelloWorldService` is contained in main function of
+The implementation of the consumer of the `HelloWorldService` is contained in
 `consumer.cpp <https://github.com/eclipse-score/communication/blob/main/score/mw/com/doc/tutorial/chapter_1/consumer.cpp>`__.
 
 Symmetric to the provider side, the 1st important step on the consumer side is the creation of a proxy side type of
@@ -282,16 +299,18 @@ the `HelloWorldInterface` via the `AsProxy` template, which we also introduce an
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 32-32
+   :start-after: [hello-world-proxy-alias-start]
+   :end-before: [hello-world-proxy-alias-end]
    :caption: consumer.cpp
 
 
-In the while-loop starting in line 40, the consumer tries to find the service instance of the
+In the while-loop, the consumer tries to find the service instance of the
 `HelloWorldService` via service discovery.
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 46-46
+   :start-after: [hello-world-find-service-start]
+   :end-before: [hello-world-find-service-end]
    :caption: consumer.cpp
 
 
@@ -310,32 +329,35 @@ Our consumer app repeatedly searches for the service instance until it is availa
 `ServiceHandleContainer` is empty, the consumer app waits for 1 second and then tries again to find the service instance.
 
 If the `ServiceHandleContainer` contains a valid service handle (service instance has been found), we can create a proxy
-instance for the service instance via the `Create` method of the `HelloWorldProxy`. This is done in line 58:
+instance for the service instance via the `Create` method of the `HelloWorldProxy`. This is done in the following code:
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 61-61
+   :start-after: [hello-world-proxy-create-start]
+   :end-before: [hello-world-proxy-create-end]
    :caption: consumer.cpp
 
 
 After this method returned a valid result containing the proxy instance, we now have our consumer side representation
 of the service instance, we can interact with.
-Symmetrically to the provider side, we move the proxy instance out of the result wrapper for convenience in line 65:
+Symmetrically to the provider side, we move the proxy instance out of the result wrapper for convenience:
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 68-68
+   :start-after: [hello-world-proxy-instance-start]
+   :end-before: [hello-world-proxy-instance-end]
    :caption: consumer.cpp
 
 
 Just like the skeleton instance, a proxy instance is also not copyable but only movable, which is the reason for the
 `std::move` here.
 Before being able to access samples of the "message" event, we need to **subscribe** to the event **first**. This is done in
-line 66:
+the following code:
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 69-69
+   :start-after: [hello-world-subscribe-start]
+   :end-before: [hello-world-subscribe-end]
    :caption: consumer.cpp
 
 
@@ -345,14 +367,15 @@ in parallel at maximum. This call could fail, if the `max_sample_count` is too h
 that many samples in parallel, because he hasn't reserved enough resources in its configuration, which we will have a
 look at later.
 
-After the `Subscribe` call succeeded (returned `Result<void>` contains no error), our consumer app now enters a loop
-(in line 75), where it cyclically checks for updates for the "message" event.
+After the `Subscribe` call succeeded (returned `Result<void>` contains no error), our consumer app now enters a loop,
+where it cyclically checks for updates for the "message" event.
 
-The API to do this, is the `ProxyEvent::GetNewSamples` API. You see the call in line 78:
+The API to do this, is the `ProxyEvent::GetNewSamples` API. You see the call here:
 
 .. literalinclude:: consumer.cpp
    :language: cpp
-   :lines: 81-87
+   :start-after: [hello-world-get-new-samples-start]
+   :end-before: [hello-world-get-new-samples-end]
    :caption: consumer.cpp
 
 

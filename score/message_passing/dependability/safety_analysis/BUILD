@@ -13,8 +13,11 @@
 
 load(
     "@score_tooling//bazel/rules/rules_score:rules_score.bzl",
+    "component_requirements",
     "dependability_analysis",
-    "fmea",
+    "failure_modes",
+    "fault_trees",
+    "safety_analysis",
 )
 
 filegroup(
@@ -32,19 +35,40 @@ filegroup(
     visibility = ["//score/message_passing/dependability:__pkg__"],
 )
 
-fmea(
-    name = "message_passing_fmea",
-    arch_design = "//score/message_passing/dependability/software_architectural_design:message_passing_architectural_design",
-    controlmeasures = ["control_measures.trlc"],
-    failuremodes = ["failure_modes.trlc"],
-    root_causes = [":fta_files"],
+failure_modes(
+    name = "message_passing_failure_modes",
+    srcs = ["failure_modes.trlc"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+fault_trees(
+    name = "message_passing_fault_trees",
+    srcs = [":fta_files"],
+    fta_package = "message_passing_fta",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":message_passing_failure_modes"],
+)
+
+component_requirements(
+    name = "message_passing_safety_measures",
+    srcs = ["safetymeasures.trlc"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//score/message_passing/dependability/requirements:feature_requirements"],
+)
+
+safety_analysis(
+    name = "message_passing_safety_analysis",
+    assessments = ["assessments.trlc"],
+    failure_modes = [":message_passing_failure_modes"],
+    fault_trees = ":message_passing_fault_trees",
+    safety_measures = [":message_passing_safety_measures"],
     visibility = ["//score/message_passing/dependability:__pkg__"],
 )
 
 dependability_analysis(
     name = "message_passing_dependability_analysis",
     arch_design = "//score/message_passing/dependability/software_architectural_design:message_passing_architectural_design",
-    fmea = ["//score/message_passing/dependability/safety_analysis:message_passing_fmea"],
+    safety_analysis = ["//score/message_passing/dependability/safety_analysis:message_passing_safety_analysis"],
     tags = ["manual"],
     visibility = ["//score/message_passing/dependability:__pkg__"],
 )

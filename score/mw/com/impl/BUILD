@@ -11,17 +11,43 @@
 # SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@score_tooling//bazel/rules/rules_score:rules_score.bzl", "component", "unit")
 load("//quality/unit_testing:unit_testing.bzl", "cc_unit_test")
-load("//score/mw:common_features.bzl", "COMPILER_WARNING_FEATURES")
+
+unit(
+    name = "errors",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/errors:unit_design",
+    ],
+    visibility = ["//score/mw/com/dependability:__pkg__"],
+    implementation = [],
+)
+
+unit(
+    name = "service_instance_identifiers",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/service_instance_identifiers:unit_design",
+    ],
+    visibility = ["//score/mw/com/dependability:__pkg__"],
+    implementation = [],
+)
 
 component(
-    name = "frontend_component",
+    name = "binding_independent",
     components = [
-        ":frontend_sd",
-        ":frontend_skeleton",
-        ":frontend_proxy",
+        ":skeleton_and_service_elements",
+        ":proxy_and_service_elements",
+        ":generic_skeleton_and_service_elements",
+        ":generic_proxy_and_service_elements",
+        ":service_discovery_unit",
+        ":runtime_unit",
+        ":sample_management_pointers",
+        "//score/mw/com/impl/mocking:mocks",
     ],
     requirements = [],
     target_compatible_with = ["@platforms//os:linux"],
@@ -30,26 +56,74 @@ component(
 )
 
 unit(
-    name = "frontend_sd",
+    name = "skeleton_and_service_elements",
     scope = [],
     tests = [],
-    unit_design = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/skeleton_and_service_elements:unit_design",
+    ],
     implementation = [],
 )
 
 unit(
-    name = "frontend_skeleton",
+    name = "proxy_and_service_elements",
     scope = [],
     tests = [],
-    unit_design = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/proxy_and_service_elements:unit_design",
+    ],
     implementation = [],
 )
 
 unit(
-    name = "frontend_proxy",
+    name = "generic_skeleton_and_service_elements",
     scope = [],
     tests = [],
-    unit_design = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/generic_skeleton_and_service_elements:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "generic_proxy_and_service_elements",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/generic_proxy_and_service_elements:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "runtime_unit",
+    design_name = "runtime",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/runtime:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "service_discovery_unit",
+    design_name = "service_discovery",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/service_discovery:unit_design",
+    ],
+    implementation = [],
+)
+
+unit(
+    name = "sample_management_pointers",
+    scope = [],
+    tests = [],
+    unit_design = [
+        "//score/mw/com/impl/dependability/sample_management_pointers:unit_design",
+    ],
     implementation = [],
 )
 
@@ -59,7 +133,6 @@ package(default_visibility = [
 
 cc_library(
     name = "impl",
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -82,7 +155,6 @@ cc_library(
     name = "generic_proxy",
     srcs = ["generic_proxy.cpp"],
     hdrs = ["generic_proxy.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
         "//score/mw/com/impl/plumbing",
@@ -109,7 +181,6 @@ cc_library(
     name = "generic_proxy_event",
     srcs = ["generic_proxy_event.cpp"],
     hdrs = ["generic_proxy_event.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         "//score/mw/com/impl/plumbing:event",
         "@score_baselibs//score/language/futurecpp",
@@ -131,7 +202,6 @@ cc_library(
     name = "proxy_event",
     srcs = ["proxy_event.cpp"],
     hdrs = ["proxy_event.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -156,7 +226,6 @@ cc_library(
     name = "generic_skeleton",
     srcs = ["generic_skeleton.cpp"],
     hdrs = ["generic_skeleton.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
         ":runtime",
@@ -186,7 +255,6 @@ cc_library(
     name = "generic_skeleton_event",
     srcs = ["generic_skeleton_event.cpp"],
     hdrs = ["generic_skeleton_event.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
         ":skeleton_base",
@@ -211,7 +279,6 @@ cc_library(
     name = "data_type_meta_info",
     srcs = ["data_type_meta_info.cpp"],
     hdrs = ["data_type_meta_info.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__pkg__",
@@ -228,7 +295,6 @@ cc_library(
     name = "skeleton_event",
     srcs = ["skeleton_event.cpp"],
     hdrs = ["skeleton_event.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -254,7 +320,6 @@ cc_library(
     name = "skeleton_field",
     srcs = ["skeleton_field.cpp"],
     hdrs = ["skeleton_field.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -281,7 +346,6 @@ cc_library(
     name = "traits",
     srcs = ["traits.cpp"],
     hdrs = ["traits.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -305,7 +369,6 @@ cc_library(
     name = "proxy_field_base",
     srcs = ["proxy_field_base.cpp"],
     hdrs = ["proxy_field_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -323,7 +386,6 @@ cc_library(
     name = "proxy_field",
     srcs = ["proxy_field.cpp"],
     hdrs = ["proxy_field.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -347,7 +409,6 @@ cc_library(
     name = "skeleton_event_base",
     srcs = ["skeleton_event_base.cpp"],
     hdrs = ["skeleton_event_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/tracing:__subpackages__",
@@ -357,7 +418,6 @@ cc_library(
         ":flag_owner",
         ":sample_allocatee_tracker",
         ":skeleton_event_binding",
-        "//score/mw/com/impl/tracing:skeleton_event_tracing",
         "//score/mw/com/impl/tracing:skeleton_event_tracing_data",
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/result",
@@ -368,7 +428,6 @@ cc_library(
     name = "skeleton_field_base",
     srcs = ["skeleton_field_base.cpp"],
     hdrs = ["skeleton_field_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/tracing:__subpackages__",
@@ -388,7 +447,6 @@ cc_library(
     name = "skeleton_base",
     srcs = ["skeleton_base.cpp"],
     hdrs = ["skeleton_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":runtime",
         ":skeleton_event_base",
@@ -417,7 +475,6 @@ cc_library(
     name = "find_service_handle",
     srcs = ["find_service_handle.cpp"],
     hdrs = ["find_service_handle.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = ["@score_baselibs//score/mw/log"],
     tags = ["FFI"],
     visibility = [
@@ -431,7 +488,6 @@ cc_library(
     name = "find_service_handler",
     srcs = ["find_service_handler.cpp"],
     hdrs = ["find_service_handler.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__pkg__",
@@ -448,7 +504,6 @@ cc_library(
     name = "proxy_base",
     srcs = ["proxy_base.cpp"],
     hdrs = ["proxy_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":proxy_event_base",
         ":proxy_field_base",
@@ -473,7 +528,6 @@ cc_library(
     name = "proxy_event_base",
     srcs = ["proxy_event_base.cpp"],
     hdrs = ["proxy_event_base.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
         "//score/mw/com/impl/tracing:proxy_event_tracing",
@@ -501,7 +555,6 @@ cc_library(
     name = "subscription_state",
     srcs = ["subscription_state.cpp"],
     hdrs = ["subscription_state.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__pkg__",
@@ -518,11 +571,11 @@ cc_library(
     hdrs = [
         "skeleton_binding.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/bindings/lola:__pkg__",
         "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/bindings/someip:__pkg__",
         "//score/mw/com/impl/plumbing:__subpackages__",
         "//score/mw/com/impl/tracing:__subpackages__",
     ],
@@ -544,11 +597,11 @@ cc_library(
     hdrs = [
         "skeleton_event_binding.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/bindings/lola:__pkg__",
         "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/bindings/someip:__pkg__",
         "//score/mw/com/impl/plumbing:__subpackages__",
         "//score/mw/com/impl/tracing:__subpackages__",
     ],
@@ -566,6 +619,24 @@ cc_library(
 )
 
 cc_library(
+    name = "generic_skeleton_event_binding",
+    srcs = ["generic_skeleton_event_binding.cpp"],
+    hdrs = ["generic_skeleton_event_binding.h"],
+    tags = ["FFI"],
+    visibility = [
+        "//score/mw/com/impl/bindings/lola:__pkg__",
+        "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/plumbing:__subpackages__",
+        "//score/mw/com/impl/tracing:__subpackages__",
+    ],
+    deps = [
+        ":receive_handler_registration_changed_handler",
+        ":skeleton_event_binding",
+        "@score_baselibs//score/result",
+    ],
+)
+
+cc_library(
     name = "proxy_binding",
     srcs = [
         "proxy_binding.cpp",
@@ -573,11 +644,11 @@ cc_library(
     hdrs = [
         "proxy_binding.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/bindings/lola:__pkg__",
         "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/bindings/someip:__pkg__",
         "//score/mw/com/impl/plumbing:__subpackages__",
         "//score/mw/com/impl/tracing:__subpackages__",
     ],
@@ -591,17 +662,15 @@ cc_library(
     name = "proxy_event_binding",
     srcs = [
         "proxy_event_binding.cpp",
-        "proxy_event_binding_base.cpp",
     ],
     hdrs = [
         "proxy_event_binding.h",
-        "proxy_event_binding_base.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/bindings/lola:__pkg__",
         "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/bindings/someip:__pkg__",
         "//score/mw/com/impl/plumbing:__subpackages__",
         "//score/mw/com/impl/tracing:__subpackages__",
     ],
@@ -627,11 +696,11 @@ cc_library(
     hdrs = [
         "generic_proxy_event_binding.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl/bindings/lola:__pkg__",
         "//score/mw/com/impl/bindings/mock_binding:__pkg__",
+        "//score/mw/com/impl/bindings/someip:__pkg__",
         "//score/mw/com/impl/plumbing:__subpackages__",
         "//score/mw/com/impl/tracing:__subpackages__",
     ],
@@ -650,7 +719,6 @@ cc_library(
     name = "handle_type",
     srcs = ["handle_type.cpp"],
     hdrs = ["handle_type.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/mw/log",
@@ -670,7 +738,6 @@ cc_library(
     name = "instance_identifier",
     srcs = ["instance_identifier.cpp"],
     hdrs = ["instance_identifier.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
@@ -686,7 +753,6 @@ cc_library(
     name = "enriched_instance_identifier",
     srcs = ["enriched_instance_identifier.cpp"],
     hdrs = ["enriched_instance_identifier.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -703,13 +769,13 @@ cc_library(
     name = "error",
     srcs = ["com_error.cpp"],
     hdrs = ["com_error.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
     ],
     deps = [
         "@score_baselibs//score/language/futurecpp",
+        "@score_baselibs//score/quality/compiler_warnings",
         "@score_baselibs//score/result",
     ],
 )
@@ -718,7 +784,6 @@ cc_library(
     name = "instance_specifier",
     srcs = ["instance_specifier.cpp"],
     hdrs = ["instance_specifier.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
     ],
@@ -736,7 +801,6 @@ cc_library(
     name = "i_service_discovery_client",
     srcs = ["i_service_discovery_client.cpp"],
     hdrs = ["i_service_discovery_client.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -755,7 +819,6 @@ cc_library(
     name = "method_type",
     srcs = ["method_type.cpp"],
     hdrs = ["method_type.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com:__subpackages__"],
 )
@@ -764,7 +827,6 @@ cc_library(
     name = "field_tags_store",
     srcs = ["field_tags_store.cpp"],
     hdrs = ["field_tags_store.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com:__subpackages__"],
     deps = [
@@ -776,7 +838,6 @@ cc_library(
     name = "field_getter_setter_signatures",
     srcs = ["field_getter_setter_signatures.cpp"],
     hdrs = ["field_getter_setter_signatures.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com:__subpackages__"],
     deps = [
@@ -788,7 +849,6 @@ cc_library(
     name = "field_tags",
     srcs = ["field_tags.cpp"],
     hdrs = ["field_tags.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = ["//score/mw/com:__subpackages__"],
 )
@@ -813,7 +873,6 @@ cc_library(
     name = "service_element_type",
     srcs = ["service_element_type.cpp"],
     hdrs = ["service_element_type.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         "@score_baselibs//score/mw/log",
     ],
@@ -828,7 +887,6 @@ cc_library(
     testonly = True,
     srcs = ["service_discovery_client_mock.cpp"],
     hdrs = ["service_discovery_client_mock.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com/gateway:__subpackages__",
         "//score/mw/com/impl:__subpackages__",
@@ -843,7 +901,6 @@ cc_library(
     name = "binding_type",
     srcs = ["binding_type.cpp"],
     hdrs = ["binding_type.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -860,7 +917,6 @@ cc_library(
         "i_binding_runtime.h",
         "i_runtime.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -882,7 +938,6 @@ cc_library(
     testonly = True,
     srcs = ["runtime_mock.cpp"],
     hdrs = ["runtime_mock.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com:__subpackages__",
     ],
@@ -896,7 +951,6 @@ cc_library(
     name = "event_receive_handler",
     srcs = ["event_receive_handler.cpp"],
     hdrs = ["event_receive_handler.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -908,7 +962,6 @@ cc_library(
     name = "initialize_sample_callback",
     srcs = ["initialize_sample_callback.cpp"],
     hdrs = ["initialize_sample_callback.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -920,7 +973,6 @@ cc_library(
     name = "receive_handler_registration_changed_handler",
     srcs = ["receive_handler_registration_changed_handler.cpp"],
     hdrs = ["receive_handler_registration_changed_handler.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -932,7 +984,6 @@ cc_library(
     name = "subscription_state_change_handler",
     srcs = ["subscription_state_change_handler.cpp"],
     hdrs = ["subscription_state_change_handler.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -947,7 +998,6 @@ cc_library(
     name = "i_service_discovery",
     srcs = ["i_service_discovery.cpp"],
     hdrs = ["i_service_discovery.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -967,7 +1017,6 @@ cc_library(
     name = "service_discovery",
     srcs = ["service_discovery.cpp"],
     hdrs = ["service_discovery.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -989,7 +1038,6 @@ cc_library(
     name = "scoped_event_receive_handler",
     srcs = ["scoped_event_receive_handler.cpp"],
     hdrs = ["scoped_event_receive_handler.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com:__subpackages__",
@@ -1002,7 +1050,6 @@ cc_library(
     testonly = True,
     srcs = ["service_discovery_mock.cpp"],
     hdrs = ["service_discovery_mock.h"],
-    features = COMPILER_WARNING_FEATURES,
     visibility = [
         "//score/mw/com:__subpackages__",
     ],
@@ -1022,9 +1069,8 @@ cc_library(
     name = "runtime",
     srcs = ["runtime.cpp"],
     hdrs = ["runtime.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
-        "//score/memory/shared:types",
+        "//score/memory/shared:memory_resource_registry",
         "//score/mw/com/impl/tracing:tracing_runtime",
         "//score/mw/com/impl/tracing/configuration:tracing_filter_config_parser",
         "@score_baselibs//score/mw/log",
@@ -1053,7 +1099,6 @@ cc_library(
     name = "sample_reference_tracker",
     srcs = ["sample_reference_tracker.cpp"],
     hdrs = ["sample_reference_tracker.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/language/safecpp/safe_math",
@@ -1074,7 +1119,6 @@ cc_library(
         "sample_allocatee_guard.h",
         "sample_allocatee_tracker.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -1088,7 +1132,6 @@ cc_library(
     name = "service_element_map_view_factory",
     srcs = ["service_element_map_view_factory.cpp"],
     hdrs = ["service_element_map_view_factory.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -1102,7 +1145,6 @@ cc_library(
     name = "service_element_map_view",
     srcs = ["service_element_map_view.cpp"],
     hdrs = ["service_element_map_view.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -1113,7 +1155,6 @@ cc_library(
     name = "flag_owner",
     srcs = ["flag_owner.cpp"],
     hdrs = ["flag_owner.h"],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     visibility = [
         "//score/mw/com/impl:__subpackages__",
@@ -1124,7 +1165,6 @@ cc_library(
     name = "error_serializer",
     srcs = ["error_serializer.cpp"],
     hdrs = ["error_serializer.h"],
-    features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":error",
         "//score/mw/com/impl/bindings/lola/methods:method_error",
@@ -1147,7 +1187,6 @@ cc_library(
     hdrs = [
         "enable_reference_to_moveable_from_this.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     deps = [
         ":reference_to_moveable",
@@ -1162,7 +1201,6 @@ cc_library(
     hdrs = [
         "reference_to_moveable.h",
     ],
-    features = COMPILER_WARNING_FEATURES,
     tags = ["FFI"],
     deps = [
         "@score_baselibs//score/language/futurecpp",
@@ -1226,7 +1264,6 @@ cc_unit_test(
 cc_unit_test(
     name = "method_type_test",
     srcs = ["method_type_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [":method_type"],
 )
 
@@ -1284,7 +1321,7 @@ cc_unit_test(
 cc_unit_test(
     name = "runtime_test",
     srcs = ["runtime_test.cpp"],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         # These tests catch exceptions instead of using gtest EXPECT_DEATH so we disable aborts_upon_exception.
         "-aborts_upon_exception",
     ],
@@ -1342,7 +1379,7 @@ cc_unit_test(
 cc_unit_test(
     name = "proxy_base_test",
     srcs = ["proxy_base_test.cpp"],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         # These tests catch exceptions instead of using gtest EXPECT_DEATH so we disable aborts_upon_exception.
         "-aborts_upon_exception",
     ],
@@ -1384,6 +1421,7 @@ cc_unit_test(
         ":generic_skeleton",
         ":generic_skeleton_event",
         ":service_discovery_mock",
+        "//score/mw/com/impl/bindings/mock_binding",
         "//score/mw/com/impl/test:binding_factory_resources",
         "//score/mw/com/impl/test:dummy_instance_identifier_builder",
         "//score/mw/com/impl/test:runtime_mock_guard",
@@ -1395,7 +1433,6 @@ cc_unit_test(
     srcs = [
         "traits_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":runtime_mock",
         ":service_discovery_mock",
@@ -1418,7 +1455,6 @@ cc_unit_test(
     srcs = [
         "skeleton_base_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":service_discovery_mock",
         "//score/mw/com/impl/bindings/mock_binding",
@@ -1428,6 +1464,7 @@ cc_unit_test(
         "//score/mw/com/impl/test:binding_factory_resources",
         "//score/mw/com/impl/test:runtime_mock_guard",
         "@score_baselibs//score/language/futurecpp",
+        "@score_baselibs//score/quality/compiler_warnings",
     ],
 )
 
@@ -1436,7 +1473,7 @@ cc_unit_test(
     srcs = [
         "com_error_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         # These tests catch exceptions instead of using gtest EXPECT_DEATH so we disable aborts_upon_exception.
         "-aborts_upon_exception",
     ],
@@ -1444,6 +1481,7 @@ cc_unit_test(
         ":error",
         "@score_baselibs//score/language/futurecpp",
         "@score_baselibs//score/language/futurecpp:futurecpp_test_support",
+        "@score_baselibs//score/quality/compiler_warnings",
     ],
 )
 
@@ -1452,7 +1490,7 @@ cc_unit_test(
     srcs = [
         "error_serializer_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES + [
+    features = [
         # These tests catch exceptions instead of using gtest EXPECT_DEATH so we disable aborts_upon_exception.
         "-aborts_upon_exception",
     ],
@@ -1470,7 +1508,6 @@ cc_unit_test(
     srcs = [
         "enable_reference_to_moveable_from_this_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":enable_reference_to_moveable_from_this",
     ],
@@ -1481,7 +1518,6 @@ cc_unit_test(
     srcs = [
         "reference_to_moveable_test.cpp",
     ],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":reference_to_moveable",
     ],
@@ -1490,7 +1526,6 @@ cc_unit_test(
 cc_unit_test(
     name = "enriched_instance_identifier_test",
     srcs = ["enriched_instance_identifier_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":enriched_instance_identifier",
     ],
@@ -1499,20 +1534,19 @@ cc_unit_test(
 cc_unit_test(
     name = "generic_proxy_event_test",
     srcs = ["generic_proxy_event_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":generic_proxy_event",
         ":proxy_event_base",
         "//score/mw/com:types",
         "//score/mw/com/impl/bindings/mock_binding",
         "//score/mw/com/impl/test:proxy_resources",
+        "@score_baselibs//score/language/futurecpp:futurecpp_test_support",
     ],
 )
 
 cc_unit_test(
     name = "handle_type_test",
     srcs = ["handle_type_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":handle_type",
     ],
@@ -1521,7 +1555,6 @@ cc_unit_test(
 cc_unit_test(
     name = "instance_identifier_test",
     srcs = ["instance_identifier_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":error",
         ":instance_identifier",
@@ -1532,17 +1565,16 @@ cc_unit_test(
 cc_unit_test(
     name = "instance_specifier_test",
     srcs = ["instance_specifier_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":error",
         ":instance_specifier",
+        "@score_baselibs//score/quality/compiler_warnings",
     ],
 )
 
 cc_unit_test(
     name = "proxy_binding_test",
     srcs = ["proxy_binding_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":proxy_binding",
     ],
@@ -1551,7 +1583,6 @@ cc_unit_test(
 cc_unit_test(
     name = "proxy_event_base_test",
     srcs = ["proxy_event_base_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":impl",
         "//score/mw/com/impl/bindings/mock_binding",
@@ -1560,9 +1591,8 @@ cc_unit_test(
 )
 
 cc_unit_test(
-    name = "proxy_event_binding_base_test",
-    srcs = ["proxy_event_binding_base_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
+    name = "proxy_event_binding_test",
+    srcs = ["proxy_event_binding_test.cpp"],
     deps = [
         ":proxy_event_binding",
     ],
@@ -1571,7 +1601,6 @@ cc_unit_test(
 cc_unit_test(
     name = "service_element_map_view_test",
     srcs = ["service_element_map_view_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":service_element_map_view_factory",
     ],
@@ -1580,7 +1609,6 @@ cc_unit_test(
 cc_unit_test(
     name = "skeleton_binding_test",
     srcs = ["skeleton_binding_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":skeleton_binding",
     ],
@@ -1589,7 +1617,6 @@ cc_unit_test(
 cc_unit_test(
     name = "skeleton_event_base_test",
     srcs = ["skeleton_event_base_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":impl",
         ":runtime_mock",
@@ -1600,7 +1627,6 @@ cc_unit_test(
 cc_unit_test(
     name = "skeleton_event_binding_test",
     srcs = ["skeleton_event_binding_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":sample_allocatee_tracker",
         ":skeleton_event_binding",
@@ -1608,13 +1634,21 @@ cc_unit_test(
 )
 
 cc_unit_test(
+    name = "generic_skeleton_event_binding_test",
+    srcs = ["generic_skeleton_event_binding_test.cpp"],
+    deps = [
+        ":generic_skeleton_event_binding",
+    ],
+)
+
+cc_unit_test(
     name = "skeleton_event_test",
     srcs = ["skeleton_event_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":runtime_mock",
         ":skeleton_event",
         "//score/mw/com/impl/bindings/mock_binding",
+        "//score/mw/com/impl/mocking:skeleton_event_mock",
         "//score/mw/com/impl/mocking:test_type_utilities",
         "//score/mw/com/impl/test:binding_factory_resources",
         "//score/mw/com/impl/test:runtime_mock_guard",
@@ -1624,7 +1658,6 @@ cc_unit_test(
 cc_unit_test(
     name = "skeleton_field_base_test",
     srcs = ["skeleton_field_base_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":impl",
         ":runtime_mock",
@@ -1635,7 +1668,6 @@ cc_unit_test(
 cc_unit_test(
     name = "skeleton_field_test",
     srcs = ["skeleton_field_test.cpp"],
-    features = COMPILER_WARNING_FEATURES,
     deps = [
         ":runtime_mock",
         ":skeleton_field",

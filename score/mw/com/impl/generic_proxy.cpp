@@ -53,6 +53,14 @@ std::vector<std::string_view> GetEventNameList(const InstanceIdentifier& identif
             }
             return event_names;
         },
+        [](const SomeIpServiceTypeDeployment& deployment) -> ReturnType {
+            ReturnType event_names;
+            for (const auto& event : deployment.events_)
+            {
+                event_names.push_back(std::string_view{event.first});
+            }
+            return event_names;
+        },
         [](const score::cpp::blank&) noexcept -> ReturnType {
             return {};
         });
@@ -108,6 +116,7 @@ GenericProxy::GenericProxy(std::unique_ptr<ProxyBinding> proxy_binding, HandleTy
 {
 }
 
+// Deviation of MISRA RULE-18-5-1: codeql::misra_deviation_next_line(destructor-contract-violation-terminate)
 GenericProxy::~GenericProxy() noexcept
 {
     if (is_proxy_owner_.IsSet())
@@ -117,12 +126,13 @@ GenericProxy::~GenericProxy() noexcept
 }
 
 GenericProxy::GenericProxy(GenericProxy&& other) noexcept
-    : ProxyBase{std::move(other)},
+    : ProxyBase{std::move(static_cast<ProxyBase&>(other))},
       generic_events_{std::move(other.generic_events_)},
       is_proxy_owner_{std::move(other.is_proxy_owner_)}
 {
 }
 
+// Deviation of MISRA RULE-18-5-1: codeql::misra_deviation_next_line(move-assignment-contract-violation-terminate)
 GenericProxy& GenericProxy::operator=(GenericProxy&& other) noexcept
 {
     if (&other != this)
@@ -131,7 +141,7 @@ GenericProxy& GenericProxy::operator=(GenericProxy&& other) noexcept
         {
             this->Deinitialize();
         }
-        ProxyBase::operator=(std::move(other));
+        ProxyBase::operator=(std::move(static_cast<ProxyBase&>(other)));
         generic_events_ = std::move(other.generic_events_);
         is_proxy_owner_ = std::move(other.is_proxy_owner_);
     }

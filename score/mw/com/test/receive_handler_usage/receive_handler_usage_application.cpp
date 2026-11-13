@@ -11,8 +11,6 @@
  * SPDX-License-Identifier: Apache-2.0
  *******************************************************************************/
 
-#include "score/mw/com/test/receive_handler_usage/receive_handler_usage_application.h"
-
 #include "score/concurrency/notification.h"
 #include "score/mw/com/com_error_domain.h"
 #include "score/mw/com/runtime.h"
@@ -85,7 +83,7 @@ score::Result<score::mw::com::test::BigDataProxy> CreateProxy(
             moved_service_discovery_promise.set_value(handles);
             score::cpp::ignore = score::mw::com::test::BigDataProxy::StopFindService(handle);
         },
-        std::move(instance_specifier));
+        instance_specifier);
     if (!handles_result.has_value())
     {
         std::cerr << "Error finding service for instance specifier" << instance_specifier.ToString() << ": "

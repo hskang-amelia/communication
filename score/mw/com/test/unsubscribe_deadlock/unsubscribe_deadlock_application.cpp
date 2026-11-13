@@ -11,8 +11,6 @@
  * SPDX-License-Identifier: Apache-2.0
  *******************************************************************************/
 
-#include "score/mw/com/test/unsubscribe_deadlock/unsubscribe_deadlock_application.h"
-
 #include "score/concurrency/notification.h"
 #include "score/mw/com/com_error_domain.h"
 #include "score/mw/com/runtime.h"
@@ -33,29 +31,8 @@
 
 const score::mw::com::test::MapApiLanesStamped kEvent_sample{};
 
-void CreateAndOfferSkeleton(const score::mw::com::InstanceSpecifier& instance_specifier, std::atomic_bool& success_flag)
+namespace
 {
-    for (std::size_t j = 0; j < 10; ++j)
-    {
-        auto bigdata_result = score::mw::com::test::BigDataSkeleton::Create(instance_specifier);
-        if (!bigdata_result.has_value())
-        {
-            success_flag = false;
-            std::cerr << "Could not create skeleton with instance specifier" << instance_specifier.ToString()
-                      << "in index " << j << "of loop, terminating." << std::endl;
-            break;
-        }
-        const auto offer_service_result = bigdata_result->OfferService();
-        if (!offer_service_result.has_value())
-        {
-            success_flag = false;
-            std::cerr << "Could not offer service for skeleton with instance specifier" << instance_specifier.ToString()
-                      << "in index " << j << "of loop, terminating." << std::endl;
-            break;
-        }
-    }
-}
-
 score::Result<score::mw::com::test::BigDataProxy> CreateProxy(
     const score::mw::com::InstanceSpecifier& instance_specifier)
 {
@@ -73,7 +50,7 @@ score::Result<score::mw::com::test::BigDataProxy> CreateProxy(
             moved_service_discovery_promise.set_value(handles);
             score::cpp::ignore = score::mw::com::test::BigDataProxy::StopFindService(handle);
         },
-        std::move(instance_specifier));
+        instance_specifier);
     if (!handles_result.has_value())
     {
         std::cerr << "Error finding service for instance specifier" << instance_specifier.ToString() << ": "
@@ -91,6 +68,7 @@ score::Result<score::mw::com::test::BigDataProxy> CreateProxy(
 
     return score::mw::com::test::BigDataProxy::Create(handles.front());
 }
+}  // namespace
 
 /**
  * Test that checks that there is no deadlock in the following situation:

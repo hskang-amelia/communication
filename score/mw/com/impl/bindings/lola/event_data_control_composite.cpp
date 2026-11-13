@@ -14,6 +14,7 @@
 #include "score/mw/com/impl/bindings/lola/control_slot_types.h"
 #include "score/mw/com/impl/bindings/lola/event_slot_status.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace score::mw::com::impl::lola
@@ -212,17 +213,17 @@ EventDataControlComposite<AtomicIndirectorType>::GetAsilBEventDataControlLocal()
 
 template <template <class> class AtomicIndirectorType>
 EventSlotStatus::EventTimeStamp EventDataControlComposite<AtomicIndirectorType>::GetEventSlotTimestamp(
-    const SlotIndexType slot) const noexcept
+    const SlotIndexType slot_index) const noexcept
 {
     if (asil_b_control_local_ != nullptr)
     {
-        const EventSlotStatus event_slot_status{(*asil_b_control_local_)[slot]};
+        const EventSlotStatus event_slot_status{(*asil_b_control_local_)[slot_index]};
         const EventSlotStatus::EventTimeStamp sample_timestamp{event_slot_status.GetTimeStamp()};
         return sample_timestamp;
     }
     else
     {
-        const EventSlotStatus event_slot_status{asil_qm_control_local_.get()[slot]};
+        const EventSlotStatus event_slot_status{asil_qm_control_local_.get()[slot_index]};
         const EventSlotStatus::EventTimeStamp sample_timestamp{event_slot_status.GetTimeStamp()};
         return sample_timestamp;
     }
@@ -250,10 +251,7 @@ EventSlotStatus::EventTimeStamp EventDataControlComposite<AtomicIndirectorType>:
         if (!slot.IsInvalid() && !slot.IsInWriting())
         {
             const auto slot_time_stamp = slot.GetTimeStamp();
-            if (latest_time_stamp < slot_time_stamp)
-            {
-                latest_time_stamp = slot_time_stamp;
-            }
+            latest_time_stamp = std::max(latest_time_stamp, slot_time_stamp);
         }
     }
     return latest_time_stamp;

@@ -17,13 +17,14 @@
 #include "score/mw/com/impl/bindings/lola/element_fq_id.h"
 #include "score/mw/com/impl/bindings/lola/event_data_control_composite.h"
 #include "score/mw/com/impl/bindings/lola/event_data_storage.h"
+#include "score/mw/com/impl/bindings/lola/event_data_storage_local_view.h"
 #include "score/mw/com/impl/bindings/lola/sample_allocatee_ptr.h"
-#include "score/mw/com/impl/bindings/lola/sample_ptr.h"
 #include "score/mw/com/impl/bindings/lola/skeleton.h"
 #include "score/mw/com/impl/bindings/lola/skeleton_event_properties.h"
 #include "score/mw/com/impl/bindings/lola/type_erased_sample_ptrs_guard.h"
 #include "score/mw/com/impl/com_error.h"
 #include "score/mw/com/impl/configuration/quality_type.h"
+#include "score/mw/com/impl/generic_skeleton_event_binding.h"
 #include "score/mw/com/impl/plumbing/sample_allocatee_ptr.h"
 #include "score/mw/com/impl/plumbing/sample_ptr.h"
 #include "score/mw/com/impl/skeleton_event_binding.h"
@@ -55,7 +56,7 @@ static constexpr std::uint8_t kMaxConcurrentFieldGetterSamplePtrs{1U};
 ///
 /// All operations on this class are _not_ thread-safe, in a manner that they shall not be invoked in parallel by
 /// different threads.
-class SkeletonEvent final : public SkeletonEventBinding
+class SkeletonEvent final : public GenericSkeletonEventBinding
 {
     // Suppress "AUTOSAR C++14 A11-3-1", The rule declares: "Friend declarations shall not be used".
     // Design decision: The "*Attorney" class is a helper, which sets the internal state of this class accessing
@@ -66,9 +67,9 @@ class SkeletonEvent final : public SkeletonEventBinding
     using ReceiveHandlerRegistrationChangedCallback = lola::IMessagePassingService::HandlerStatusChangeCallback;
 
   public:
-    using SkeletonEventBinding::SendTraceCallback;
-    using SkeletonEventBinding::SubscribeTraceCallback;
-    using SkeletonEventBinding::UnsubscribeTraceCallback;
+    using GenericSkeletonEventBinding::SendTraceCallback;
+    using GenericSkeletonEventBinding::SubscribeTraceCallback;
+    using GenericSkeletonEventBinding::UnsubscribeTraceCallback;
 
     SkeletonEvent(Skeleton& parent,
                   const ElementFqId element_fq_id,
@@ -85,16 +86,15 @@ class SkeletonEvent final : public SkeletonEventBinding
     ~SkeletonEvent() noexcept override = default;
 
     Result<void> Send(impl::SampleAllocateePtr<void> sample,
-                      std::optional<SendTraceCallback> send_trace_callback) noexcept override;
+                      const std::optional<SendTraceCallback>& send_trace_callback) override;
 
-    Result<impl::SampleAllocateePtr<void>> Allocate(SampleAllocateeGuard guard) noexcept override;
+    Result<impl::SampleAllocateePtr<void>> Allocate(SampleAllocateeGuard guard) override;
 
     Result<impl::SamplePtr<void>> GetLatestSample(QualityType quality_type) override;
 
-    Result<void> PrepareOffer(
-        const std::optional<InitializeSampleCallback>& initialize_sample_callback) noexcept override;
+    Result<void> PrepareOffer(const std::optional<InitializeSampleCallback>& initialize_sample_callback) override;
 
-    void PrepareStopOffer() noexcept override;
+    void PrepareStopOffer() override;
 
     /// \brief Get size for the underlying event-type (including possible dynamic memory allocations) and its alignment
     memory::DataTypeSizeInfo GetEventDataTypeSizeInfo() const noexcept override
@@ -109,7 +109,7 @@ class SkeletonEvent final : public SkeletonEventBinding
 
     void SetSkeletonEventTracingData(impl::tracing::SkeletonEventTracingData tracing_data) noexcept override;
 
-    Result<void> Notify() noexcept override;
+    Result<void> Notify() override;
 
     Result<void> SetReceiveHandlerRegistrationChangedHandler(
         ReceiveHandlerRegistrationChangedCallback callback) noexcept override;
@@ -140,12 +140,12 @@ class SkeletonEvent final : public SkeletonEventBinding
     }
     /// \brief Dispatches NotifyEvent() to QM and ASIL consumers if their respective
     ///        receive-handler registration flags are set.
-    Result<void> NotifyConsumersIfHandlersRegistered() noexcept;
+    Result<void> NotifyConsumersIfHandlersRegistered();
 
     Skeleton& parent_;
     std::string_view event_name_;
     ElementFqId element_fq_id_;
-    EventDataStorage* event_data_storage_;
+    std::optional<EventDataStorageLocalView> event_data_storage_local_view_;
     memory::DataTypeSizeInfo event_sample_size_info_;
     SkeletonEventProperties event_properties_;
 

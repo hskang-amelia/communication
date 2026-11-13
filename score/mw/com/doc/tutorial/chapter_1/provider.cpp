@@ -13,10 +13,10 @@
 #include "score/mw/com/doc/tutorial/chapter_1/hello_world_service.h"
 #include "score/mw/com/types.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
-#include <cstdio>
-#include <cstring>
+#include <string>
 
 constexpr std::string_view kHelloWorld{"Hello World"};
 namespace
@@ -30,7 +30,9 @@ void SignalHandler(int /*signum*/)
 }
 }  // namespace
 
+// [hello-world-skeleton-alias-start]
 using HelloWorldSkeleton = score::mw::com::AsSkeleton<score::mw::com::tutorial::HelloWorldInterface>;
+// [hello-world-skeleton-alias-end]
 
 int main()
 {
@@ -40,12 +42,18 @@ int main()
     auto instance_specifier = score::mw::com::InstanceSpecifier::Create(std::string{"MyHelloWorldServiceInstance"});
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(instance_specifier.has_value(), "Failed to create InstanceSpecifier!");
 
+    // [hello-world-skeleton-create-start]
     auto hello_world_service_instance_result = HelloWorldSkeleton::Create(instance_specifier.value());
+    // [hello-world-skeleton-create-end]
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(hello_world_service_instance_result.has_value(),
                                                 "Failed to create HelloWorldSkeleton instance!");
+    // [hello-world-skeleton-instance-start]
     auto hello_world_service_instance = std::move(hello_world_service_instance_result).value();
+    // [hello-world-skeleton-instance-end]
 
+    // [hello-world-offer-service-start]
     auto offer_result = hello_world_service_instance.OfferService();
+    // [hello-world-offer-service-end]
     SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(offer_result.has_value(),
                                                 "Failed to offer HelloWorldSkeleton instance!");
 
@@ -55,7 +63,9 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Allocate a slot, where to publish the next event
+        // [hello-world-allocate-start]
         auto sample_allocatee_ptr = hello_world_service_instance.message.Allocate();
+        // [hello-world-allocate-end]
         if (!sample_allocatee_ptr)
         {
             std::cerr << "Failed to allocate sample_allocatee_ptr: " << sample_allocatee_ptr.error() << std::endl;
@@ -63,18 +73,16 @@ int main()
         }
 
         // Write new event data to slot
-        std::memcpy(sample_allocatee_ptr.value().Get()->data(), kHelloWorld.data(), kHelloWorld.size());
-        auto* buf = sample_allocatee_ptr.value().Get()->data();
-        const auto remaining = sample_allocatee_ptr.value().Get()->size() - kHelloWorld.size();
-        const auto chars_written = std::snprintf(buf + kHelloWorld.size(), remaining, "%zu", send_counter);
-        if (chars_written < 0)
-        {
-            std::cerr << "Failed to write 'send_counter' to sample_allocatee_ptr!" << std::endl;
-            exit(1);
-        }
+        const std::string message = std::string{kHelloWorld} + std::to_string(send_counter);
+        auto& sample = *sample_allocatee_ptr.value().Get();
+        auto* buf = sample.data();
+        const auto chars_to_copy = std::min(message.size(), sample.size() - 1U);
+        *std::copy_n(message.begin(), chars_to_copy, sample.begin()) = '\0';
 
         // Send the new event sample (make it visible to potential consumers)
+        // [hello-world-send-start]
         auto send_result = hello_world_service_instance.message.Send(std::move(sample_allocatee_ptr.value()));
+        // [hello-world-send-end]
         if (!send_result)
         {
             std::cerr << "Failed to send sample_allocatee_ptr: " << send_result.error() << std::endl;

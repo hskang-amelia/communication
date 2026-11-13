@@ -78,14 +78,14 @@ class MyDummyProxyWithField : public ProxyBase
 struct ProxyEventStruct
 {
     using ProxyType = MyDummyProxyWithEvent;
-    using ProxyServiceElementBindingFactoryMockGuard = ProxyEventBindingFactoryMockGuard<TestSampleType>;
+    using ProxyServiceElementBindingFactoryMockGuard = ProxyEventBindingFactoryMockGuard;
     using TracePointType = tracing::ProxyEventTracePointType;
 };
 
 struct ProxyFieldStruct
 {
     using ProxyType = MyDummyProxyWithField;
-    using ProxyServiceElementBindingFactoryMockGuard = ProxyFieldBindingFactoryMockGuard<TestSampleType>;
+    using ProxyServiceElementBindingFactoryMockGuard = ProxyFieldBindingFactoryMockGuard;
     using TracePointType = tracing::ProxyFieldTracePointType;
 };
 
@@ -115,19 +115,25 @@ class ProxyEventTracingFixture : public ::testing::Test
         proxy_ = std::make_unique<ProxyType>(std::make_unique<mock_binding::Proxy>(), kHandle);
     }
 
-    void ExpectProxyServiceElementBindingCreation(ProxyEventBindingFactoryMockGuard<TestSampleType>& factory_mock_guard)
+    void ExpectProxyServiceElementBindingCreation(ProxyEventBindingFactoryMockGuard& factory_mock_guard)
     {
-        auto proxy_event_binding_mock_ptr = std::make_unique<mock_binding::ProxyEvent<TestSampleType>>();
+        auto proxy_event_binding_mock_ptr = std::make_unique<mock_binding::ProxyEvent>();
         mock_proxy_event_binding_ = proxy_event_binding_mock_ptr.get();
-        EXPECT_CALL(factory_mock_guard.factory_mock_, Create(_, _, kServiceElementName, ServiceElementType::EVENT))
+        EXPECT_CALL(factory_mock_guard.factory_mock_,
+                    Create(_,
+                           _,
+                           kServiceElementName,
+                           ServiceElementType::EVENT,
+                           CreateDataTypeSizeInfoFromTypes<TestSampleType>()))
             .WillOnce(Return(ByMove(std::move(proxy_event_binding_mock_ptr))));
     }
 
-    void ExpectProxyServiceElementBindingCreation(ProxyFieldBindingFactoryMockGuard<TestSampleType>& factory_mock_guard)
+    void ExpectProxyServiceElementBindingCreation(ProxyFieldBindingFactoryMockGuard& factory_mock_guard)
     {
-        auto proxy_event_binding_mock_ptr = std::make_unique<mock_binding::ProxyEvent<TestSampleType>>();
+        auto proxy_event_binding_mock_ptr = std::make_unique<mock_binding::ProxyEvent>();
         mock_proxy_event_binding_ = proxy_event_binding_mock_ptr.get();
-        EXPECT_CALL(factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kServiceElementName))
+        EXPECT_CALL(factory_mock_guard.factory_mock_,
+                    CreateEventBinding(_, _, kServiceElementName, CreateDataTypeSizeInfoFromTypes<TestSampleType>()))
             .WillOnce(Return(ByMove(std::move(proxy_event_binding_mock_ptr))));
     }
 
@@ -212,7 +218,7 @@ class ProxyEventTracingFixture : public ::testing::Test
     std::unique_ptr<ProxyType> proxy_{nullptr};
     RuntimeMockGuard runtime_mock_guard_{};
     tracing::TracingFilterConfigMock tracing_filter_config_mock_{};
-    mock_binding::ProxyEvent<TestSampleType>* mock_proxy_event_binding_{nullptr};
+    mock_binding::ProxyEvent* mock_proxy_event_binding_{nullptr};
 };
 
 // Gtest will run all tests in the ProxyEventTracingFixture once for every type, t, in MyTypes, such that TypeParam
@@ -398,7 +404,7 @@ ProxyEventTracingData ProxyEventTracingWithDefaultId(std::array<bool, 11> enable
                                  enable_flags[10]};
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ProxyEventTracingEnabledTracePointsParamaterizedFixture,
     ProxyEventTracingEnabledTracePointsParamaterizedFixture,
     ::testing::Values(
@@ -416,7 +422,7 @@ INSTANTIATE_TEST_CASE_P(
         ProxyEventTracingWithDefaultId({false, false, false, false, false, false, false, false, true, false, false}),
         ProxyEventTracingWithDefaultId({false, false, false, false, false, false, false, false, false, true, false}),
         ProxyEventTracingWithDefaultId({false, false, false, false, false, false, false, false, false, false, true})));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ProxyFieldTracingEnabledTracePointsParamaterizedFixture,
     ProxyFieldTracingEnabledTracePointsParamaterizedFixture,
     ::testing::Values(
@@ -1840,11 +1846,10 @@ TYPED_TEST(ProxyEventTracingGetNewSamplesCallbackFixture, GetNewSamplesCallbackC
         expected_enabled_trace_points, kServiceIdentifierStringView, kServiceElementName, kInstanceSpecifierStringView);
 
     // and that GetNewSamples will be called on the binding with the wrapped handler containing the trace call
-    typename ProxyEventBinding<TestSampleType>::Callback wrapper_get_new_samples_callback{};
+    ProxyEventBinding::Callback wrapper_get_new_samples_callback{};
     EXPECT_CALL(*this->mock_proxy_event_binding_, GetNewSamples(_, _))
         .WillOnce(WithArgs<0>(
-            Invoke([&wrapper_get_new_samples_callback](
-                       typename ProxyEventBinding<TestSampleType>::Callback&& callback) -> Result<std::size_t> {
+            Invoke([&wrapper_get_new_samples_callback](ProxyEventBinding::Callback&& callback) -> Result<std::size_t> {
                 wrapper_get_new_samples_callback = std::move(callback);
                 return 1U;
             })));
@@ -1911,11 +1916,10 @@ TYPED_TEST(ProxyEventTracingGetNewSamplesCallbackFixture,
         expected_enabled_trace_points, kServiceIdentifierStringView, kServiceElementName, kInstanceSpecifierStringView);
 
     // and that GetNewSamples will be called on the binding with the wrapped handler containing the trace call
-    typename ProxyEventBinding<TestSampleType>::Callback wrapper_get_new_samples_callback{};
+    ProxyEventBinding::Callback wrapper_get_new_samples_callback{};
     EXPECT_CALL(*this->mock_proxy_event_binding_, GetNewSamples(_, _))
         .WillOnce(WithArgs<0>(
-            Invoke([&wrapper_get_new_samples_callback](
-                       typename ProxyEventBinding<TestSampleType>::Callback&& callback) -> Result<std::size_t> {
+            Invoke([&wrapper_get_new_samples_callback](ProxyEventBinding::Callback&& callback) -> Result<std::size_t> {
                 wrapper_get_new_samples_callback = std::move(callback);
                 return 1U;
             })));
@@ -1990,11 +1994,10 @@ TYPED_TEST(ProxyEventTracingGetNewSamplesCallbackFixture,
         expected_enabled_trace_points, kServiceIdentifierStringView, kServiceElementName, kInstanceSpecifierStringView);
 
     // and that GetNewSamples will be called on the binding with the wrapped handler containing the trace call
-    typename ProxyEventBinding<TestSampleType>::Callback wrapper_get_new_samples_callback{};
+    ProxyEventBinding::Callback wrapper_get_new_samples_callback{};
     EXPECT_CALL(*this->mock_proxy_event_binding_, GetNewSamples(_, _))
         .WillOnce(WithArgs<0>(
-            Invoke([&wrapper_get_new_samples_callback](
-                       typename ProxyEventBinding<TestSampleType>::Callback&& callback) -> Result<std::size_t> {
+            Invoke([&wrapper_get_new_samples_callback](ProxyEventBinding::Callback&& callback) -> Result<std::size_t> {
                 wrapper_get_new_samples_callback = std::move(callback);
                 return 1U;
             })));
@@ -2063,11 +2066,10 @@ TYPED_TEST(ProxyEventTracingGetNewSamplesCallbackFixture, GetNewSamplesCallbackC
         expected_enabled_trace_points, kServiceIdentifierStringView, kServiceElementName, kInstanceSpecifierStringView);
 
     // and that GetNewSamples will be called on the binding with the wrapped handler containing the trace call
-    typename ProxyEventBinding<TestSampleType>::Callback wrapper_get_new_samples_callback{};
+    ProxyEventBinding::Callback wrapper_get_new_samples_callback{};
     EXPECT_CALL(*this->mock_proxy_event_binding_, GetNewSamples(_, _))
         .WillOnce(WithArgs<0>(
-            Invoke([&wrapper_get_new_samples_callback](
-                       typename ProxyEventBinding<TestSampleType>::Callback&& callback) -> Result<std::size_t> {
+            Invoke([&wrapper_get_new_samples_callback](ProxyEventBinding::Callback&& callback) -> Result<std::size_t> {
                 wrapper_get_new_samples_callback = std::move(callback);
                 return 1U;
             })));

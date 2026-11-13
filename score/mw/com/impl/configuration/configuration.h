@@ -90,10 +90,12 @@ class Configuration final
     {
         return global_configuration_;
     }
+    const GlobalConfiguration&& GetGlobalConfiguration() const&& noexcept = delete;
     const TracingConfiguration& GetTracingConfiguration() const& noexcept
     {
         return tracing_configuration_;
     }
+    const TracingConfiguration&& GetTracingConfiguration() const&& noexcept = delete;
 
     std::optional<std::reference_wrapper<const ServiceTypeDeployment>> GetServiceTypeDeployment(
         const ServiceIdentifierType& service_identifier_type) const noexcept;
@@ -122,10 +124,13 @@ class Configuration final
     }
 
     /// \brief Public interface to trigger a validation of this configuration.
-    score::Result<void> Validate() const noexcept;
+    score::Result<void> Validate() const;
 
     /// \brief Determine if any service with a LoLa binding is defined in this configuration
-    score::Result<bool> HasLolaServiceDeployment() const noexcept;
+    score::Result<bool> HasLolaServiceDeployment() const;
+
+    /// \brief Returns whether the configuration contains at least one service type with a SOME/IP binding.
+    score::Result<bool> HasSomeIpServiceDeployment() const noexcept;
 
     /// \brief Returns the list of names (ToString()) of all configured ServiceIdentifierTypes
     std::set<std::string_view> GetServiceTypeNames() const noexcept;
@@ -137,7 +142,7 @@ class Configuration final
     /// \param element_type element type of which to get names
     /// \return a set of string_views denoting the service element names.
     std::set<std::string_view> GetElementNamesOfServiceType(const std::string_view service_type,
-                                                            ServiceElementType element_type) const noexcept;
+                                                            ServiceElementType element_type) const;
 
     /// \brief Returns a set of UIDs of all allowed users of all service instances defined in this configuration for the
     /// given
@@ -171,7 +176,7 @@ class Configuration final
     ///            safe to extract references/string_views from the entries passed to callback and use them beyond
     ///            the lifetime of a single call, as long as this Configuration outlives them.
     template <typename Callback>
-    void ForEachServiceType(Callback&& callback) const noexcept
+    void ForEachServiceType(Callback&& callback) const
     {
         const auto current_list = std::atomic_load_explicit(&service_types_, std::memory_order_acquire);
         if (current_list == nullptr)
@@ -234,7 +239,7 @@ class Configuration final
     /// \brief Validate if service ASIL levels match the application's assigned ASIL level.
     score::Result<void> CrossCheckAsilLevels() const noexcept;
     /// \brief Validate if service type definitions and service instance definitions fit together.
-    score::Result<void> CrossCheckServiceInstancesToTypes() const noexcept;
+    score::Result<void> CrossCheckServiceInstancesToTypes() const;
 
     /// \brief Helper func aggregates allowed_user_ids of the given quality type into aggregated_allowed_users. If
     ///        allowed_user_ids is empty (no access restriction!), then aggregated_allowed_users is cleared!

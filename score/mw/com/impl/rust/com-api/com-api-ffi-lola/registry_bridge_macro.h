@@ -946,7 +946,6 @@ inline ::score::mw::com::impl::rust::TypeOperationImpl<T>& get_type_operations()
     };                                                                                                     \
                                                                                                            \
     static method_member##_MethodRegistrationHelper method_member##_method_reg_instance;
-    } /* namespace */
 
 #define END_EXPORT_MW_COM_INTERFACE() }  // namespace id##_detail
 

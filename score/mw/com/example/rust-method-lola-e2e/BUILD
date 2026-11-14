@@ -41,6 +41,7 @@ sh_test(
         "queue",
         "two_consumers",
         "early",
+        "crash",
         "handler_panic",
         "dup_appid",
         "dup_appid_producer",

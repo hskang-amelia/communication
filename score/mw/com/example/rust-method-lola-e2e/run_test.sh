@@ -21,7 +21,7 @@ BIN="$(realpath "$1")"
 TEMPLATE="$(realpath "$2")"
 shift 2
 SCENARIOS=("$@")
-[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic seq concurrent overflow queue two_consumers early handler_panic dup_appid dup_appid_producer)
+[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(basic seq concurrent overflow queue two_consumers early crash handler_panic dup_appid dup_appid_producer)
 
 WORK="$(mktemp -d)"
 chmod 0755 "$WORK"
@@ -129,6 +129,19 @@ s_early() {
     local r=0; wait $c || r=1; cat "$WORK/early.log"; return $r
 }
 
+s_crash() {
+    mkdir -p "$WORK/sync"; rm -f "$WORK/sync"/*
+    start_producer || return 1
+    E2E_SYNC_DIR="$WORK/sync" consumer 7501 crash > "$WORK/crash.log" 2>&1 & local c=$!
+    for _ in $(seq 1 200); do [ -e "$WORK/sync/ready" ] && break; sleep 0.1; done
+    kill -9 "$PRODUCER"; wait "$PRODUCER" 2>/dev/null; PRODUCER=""
+    touch "$WORK/sync/killed"
+    sleep 2
+    start_producer || return 1
+    touch "$WORK/sync/restarted"
+    local r=0; wait $c || r=1; cat "$WORK/crash.log"; return $r
+}
+
 for s in "${SCENARIOS[@]}"; do
     case "$s" in
         basic|seq) run "$s" s_simple "$s" ;;
@@ -140,6 +153,7 @@ for s in "${SCENARIOS[@]}"; do
         dup_appid) run dup_appid s_dup_appid ;;
         dup_appid_producer) run dup_appid_producer s_dup_appid_producer ;;
         early) run early s_early ;;
+        crash) run crash s_crash ;;
         *) echo "unknown scenario $s"; RESULT[$s]=FAIL ;;
     esac
 done

@@ -20,7 +20,7 @@
 //! `run_test.sh` starts the processes for each scenario.
 
 use std::future::ready;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -151,6 +151,7 @@ fn connect(rt: &LolaRuntimeImpl, within: Duration) -> Option<Consumer> {
         {
             Ok(found) => {
                 if let Some(b) = found.into_iter().next() {
+                    // The service can be found before its methods are ready: keep trying.
                     match b.build() {
                         Ok(c) => return Some(c),
                         Err(e) => println!("consumer build failed: {e:?}"),
@@ -322,6 +323,52 @@ fn scenario_handler_panic(c: &Consumer, k: &mut Checks) {
     println!("INFO call after the handler panic: {r:?}");
 }
 
+/// Waits until `file` exists (written by run_test.sh).
+fn wait_for(file: &Path, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while !file.exists() {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+fn scenario_crash(rt: &LolaRuntimeImpl, c: &Consumer, k: &mut Checks) {
+    let dir = PathBuf::from(std::env::var("E2E_SYNC_DIR").unwrap_or_else(|_| ".".into()));
+    step("before kill", Duration::from_secs(5));
+    let r = add(c, 1, 1);
+    k.check("call before the producer dies", r == Ok(2), format!("{r:?}"));
+    println!("READY_FOR_KILL");
+    let _ = std::fs::write(dir.join("ready"), b"");
+    step("wait for kill", Duration::from_secs(30));
+    if !wait_for(&dir.join("killed"), Duration::from_secs(25)) {
+        k.check("producer killed by the driver", false, "no signal".into());
+        return;
+    }
+    step("call after kill", Duration::from_secs(10));
+    let r = add(c, 1, 1);
+    k.check("call to a dead producer returns an error", r.is_err(), format!("{r:?}"));
+    step("wait for restart", Duration::from_secs(30));
+    if !wait_for(&dir.join("restarted"), Duration::from_secs(25)) {
+        k.check("producer restarted by the driver", false, "no signal".into());
+        return;
+    }
+    step("rediscover", Duration::from_secs(20));
+    let Some(fresh) = connect(rt, Duration::from_secs(15)) else {
+        k.check("rediscover the restarted producer", false, "not found".into());
+        return;
+    };
+    println!("OK rediscover the restarted producer");
+    step("call restarted producer", Duration::from_secs(5));
+    let r = add(&fresh, 20, 22);
+    k.check("call to the restarted producer", r == Ok(42), format!("{r:?}"));
+    step("old consumer after restart", Duration::from_secs(10));
+    let r = add(c, 1, 1);
+    println!("INFO old consumer after restart: {r:?}");
+}
+
 fn consumer(config: &Path, scenario: &str) -> ExitCode {
     start_watchdog();
     let rt = runtime(config);
@@ -343,6 +390,7 @@ fn consumer(config: &Path, scenario: &str) -> ExitCode {
         "queue" => scenario_queue(&c, &mut k),
         "integrity" => scenario_integrity(&c, &mut k),
         "handler_panic" => scenario_handler_panic(&c, &mut k),
+        "crash" => scenario_crash(&rt, &c, &mut k),
         other => k.check("scenario", false, format!("unknown {other}")),
     }
     if let Ok(mut s) = STEP.lock() {

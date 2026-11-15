@@ -29,8 +29,8 @@
 //TODO: revist this once com-api is stable - Ticket-234827
 #![allow(clippy::needless_lifetimes)]
 
-use crate::Debug;
 use core::clone::Clone;
+use core::fmt::Debug;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
@@ -72,6 +72,17 @@ impl<B: FFIBridge> LolaConsumerInfo<B> {
     /// Get a reference to the handle, guaranteed valid as long as this struct exists
     pub fn get_handle(&self) -> Option<&HandleType> {
         self.handle_container.get(self.handle_index)
+    }
+
+    /// The interface UID this consumer instance was discovered for.
+    pub(crate) fn interface_id(&self) -> &'static str {
+        self.interface_id
+    }
+
+    /// The FFI bridge this consumer instance was discovered through.
+    /// `pub(crate)` for the same reason as `interface_id()` above.
+    pub(crate) fn bridge(&self) -> &B {
+        &self.bridge
     }
 }
 
@@ -247,6 +258,12 @@ impl<B: FFIBridge> NativeProxyBase<B> {
             bridge: bridge.clone(),
         })
     }
+
+    /// Raw `ProxyBase*`, valid for as long as `self` (or a clone of the `Arc` wrapping it, see
+    /// `ProxyInstanceManager`) is alive.
+    pub(crate) fn as_ptr(&self) -> *mut ProxyBase {
+        self.proxy.as_ptr()
+    }
 }
 
 /// This type contains the native proxy event pointer for a specific event identifier
@@ -304,6 +321,35 @@ pub struct LolaSubscribableImpl<T, B: FFIBridge> {
     instance_info: LolaConsumerInfo<B>,
     proxy_instance: ProxyInstanceManager<B>,
     data: PhantomData<T>,
+}
+
+impl<T, B: FFIBridge> LolaSubscribableImpl<T, B> {
+    /// Test-only constructor: `LolaSubscribableImpl`'s fields (and `LolaConsumerInfo`'s/
+    /// `ProxyInstanceManager`'s own) are private to this module, so `field_consumer.rs`'s own test
+    /// module (a sibling, not a descendant, of this one) has no other way to build one for
+    /// `LolaFieldSubscriber::inner`. Builds a proxy via the real (mocked) `create_proxy` FFI call
+    /// with a dummy `HandleType`/null `HandleContainer` — bypassing `Subscriber::new`'s own
+    /// `instance_info.get_handle()` call, which would dereference that null container for real (see
+    /// this same trick already used by this module's own `test::make_proxy_instance`/
+    /// `test::make_instance_info` helpers).
+    #[cfg(test)]
+    pub(crate) fn new_for_test(identifier: &'static str, bridge: B, interface_id: &'static str) -> Result<Self> {
+        let handle = HandleType::default();
+        let native_proxy = NativeProxyBase::new(&bridge, interface_id, &handle)?;
+        let proxy_instance = ProxyInstanceManager(Arc::new(native_proxy));
+        let instance_info = LolaConsumerInfo {
+            handle_container: Arc::new(HandleContainer::new(std::ptr::null_mut())),
+            handle_index: 0,
+            interface_id,
+            bridge,
+        };
+        Ok(Self {
+            identifier,
+            instance_info,
+            proxy_instance,
+            data: PhantomData,
+        })
+    }
 }
 
 impl<T: CommData + Debug, B: FFIBridge> Subscriber<T, LolaRuntimeImpl<B>> for LolaSubscribableImpl<T, B> {
@@ -511,6 +557,37 @@ impl<T: CommData + Debug, B: FFIBridge> Drop for LolaSubscriberImpl<T, B> {
 }
 
 impl<T: CommData + Debug, B: FFIBridge> LolaSubscriberImpl<T, B> {
+    /// Number of sample slots that can still be filled before this subscription's buffer overflows.
+    /// Backs `FieldSubscription::get_free_sample_count()` (field_consumer.rs).
+    pub(crate) fn get_free_sample_count(&self) -> Result<usize> {
+        // Reuses the same exclusivity guard try_receive already goes through, even though
+        // GetFreeSampleCount is a read-only/noexcept query on the C++ side with no real need for
+        // it — simpler than adding a second, guard-bypassing access path to ProxyEventManager for a
+        // single infrequently-called query.
+        let mut guard = self.event.get_proxy_event();
+        // SAFETY: guard provides exclusive, valid access to this subscription's ProxyEventBase* for
+        // the duration of this call.
+        Ok(unsafe {
+            self.instance_info
+                .bridge
+                .proxy_event_get_free_sample_count(guard.deref_mut())
+        })
+    }
+
+    /// Number of new samples a call to `try_receive` would currently deliver.
+    /// See `get_free_sample_count`'s doc comment above.
+    pub(crate) fn get_num_new_samples_available(&self) -> Result<usize> {
+        let mut guard = self.event.get_proxy_event();
+        // SAFETY: guard provides exclusive, valid access to this subscription's ProxyEventBase* for
+        // the duration of this call.
+        unsafe {
+            self.instance_info
+                .bridge
+                .proxy_event_get_num_new_samples_available(guard.deref_mut())
+        }
+        .ok_or(Error::EventError(EventFailedReason::EventNotAvailable))
+    }
+
     fn init_async_receive(&self, event_guard: &mut ProxyEventManagerGuard) -> Result<()> {
         let callback_waker = Arc::clone(&self.waker_storage);
         let waker_callback = move || {
@@ -1058,7 +1135,7 @@ impl<I: Interface, B: FFIBridge> ConsumerBuilder<I, LolaRuntimeImpl<B>> for Lola
 
 impl<I: Interface, B: FFIBridge> Builder<I::Consumer<LolaRuntimeImpl<B>>> for LolaConsumerBuilder<I, B> {
     fn build(self) -> Result<I::Consumer<LolaRuntimeImpl<B>>> {
-        Ok(Consumer::new(self.instance_info))
+        Consumer::new(self.instance_info)
     }
 }
 
@@ -1242,15 +1319,19 @@ mod test {
         let evt = event_alloc.clone();
 
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| evt.allocate());
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -1260,6 +1341,7 @@ mod test {
 
         let evt_cleanup = event_alloc.clone();
         mock.expect_unsubscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -1268,9 +1350,12 @@ mod test {
                 );
             });
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1305,16 +1390,20 @@ mod test {
         let proxy_alloc_clone = proxy_alloc.clone();
         let event_alloc_clone = event_alloc.clone();
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| proxy_alloc_clone.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| event_alloc_clone.allocate());
 
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| {
                 Some(TypeOperationsManager::new(
@@ -1322,16 +1411,15 @@ mod test {
                 ))
             });
         mock.expect_get_samples_from_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _, _, _| 1);
-        mock.expect_set_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_, _| true);
-        mock.expect_clear_event_receive_handler()
-            .in_sequence(&mut seq)
-            .returning(|_| ());
+        // try_receive is synchronous, so no async receive handler is registered or cleared.
+        mock.expect_set_event_receive_handler().never();
+        mock.expect_clear_event_receive_handler().never();
 
         mock.expect_unsubscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |ptr| {
                 assert!(
@@ -1339,9 +1427,12 @@ mod test {
                     "unsubscribe_to_event called with unknown pointer"
                 );
             });
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(proxy_alloc.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         // Create a single shared mock with all necessary expectations
         let bridge = SharedMockBridge::new(mock);
@@ -1378,23 +1469,30 @@ mod test {
         let evt = event_alloc.clone();
 
         mock.expect_create_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _| prox.allocate());
         mock.expect_get_event_from_proxy()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(move |_, _, _| evt.allocate());
         mock.expect_subscribe_to_event()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| true);
         // Returning None here is the scenario under test, TypeOperations lookup failed.
         mock.expect_get_type_ops_instance()
+            .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| None);
 
         let prox_cleanup = proxy_alloc.clone();
-        mock.expect_destroy_proxy().in_sequence(&mut seq).returning(move |ptr| {
-            assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
-        });
+        mock.expect_destroy_proxy()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |ptr| {
+                assert!(prox_cleanup.free(ptr), "destroy_proxy called with unknown pointer");
+            });
 
         let bridge = SharedMockBridge::new(mock);
         let subscribable = LolaSubscribableImpl::<TestData, SharedMockBridge> {

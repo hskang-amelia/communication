@@ -26,11 +26,20 @@
 //! that utilize the COM API abstractions.
 
 mod consumer;
+mod field_consumer;
+mod field_producer;
+// Synchronous method calls and field get/set (https://github.com/eclipse-score/communication/issues/782).
+mod method;
 mod producer;
 mod runtime;
 
 pub use consumer::{LolaConsumerDiscovery, LolaConsumerInfo, LolaSample, LolaSubscribableImpl};
+pub use field_consumer::LolaFieldSubscriber;
+pub use field_producer::LolaFieldPublisher;
 pub use producer::{LolaProducerBuilder, LolaProviderInfo, LolaPublisher, LolaSampleMaybeUninit, LolaSampleMut};
 pub use runtime::{LolaRuntimeImpl, RuntimeBuilderImpl};
 
-use core::fmt::Debug;
+pub use method::{
+    LolaFieldGetCaller, LolaFieldSetCaller, LolaMethodCaller, LolaMethodHandler, LolaMethodInArgAllocator,
+    LolaMethodInArgMaybeUninit, LolaMethodReturnSample,
+};
